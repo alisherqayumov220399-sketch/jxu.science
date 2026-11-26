@@ -1,5 +1,5 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { ADMIN_CREDENTIALS_FILE, TOKEN_TTL_MS, getSessionSecret } from './config.js';
 import { getDatabase, mutateDatabase, saveDatabaseSync } from './data/dbManager.js';
 
@@ -33,6 +33,8 @@ export function generatePassword(length = 14) {
 
 /* ---------------- Admin hisobi ---------------- */
 
+export const DEFAULT_ADMIN_USERNAME = 'OTKTF';
+
 function writeAdminCredentialsFile(username, password) {
   try {
     fs.writeFileSync(
@@ -46,29 +48,30 @@ function writeAdminCredentialsFile(username, password) {
 }
 
 /**
- * Admin hisobi yo'q bo'lsa yaratadi. ADMIN_USERNAME / ADMIN_PASSWORD muhit
- * o'zgaruvchilari berilmasa, tasodifiy parol yaratilib konsolga va
- * DATA_DIR/ADMIN_PAROL.txt fayliga yoziladi.
+ * Admin hisobi yo'q bo'lsa yaratadi (standart login: OTKTF).
+ * Parol ADMIN_PASSWORD muhit o'zgaruvchisidan olinadi; u berilmasa tasodifiy
+ * parol yaratilib konsolga va DATA_DIR/ADMIN_PAROL.txt fayliga yoziladi.
+ * Parol hech qachon kod ichida saqlanmaydi (repozitoriy ochiq bo'lishi mumkin).
  */
 export function ensureAdminAccount({ forceReset = false } = {}) {
   const db = getDatabase();
   if (db.admin && !forceReset) return null;
 
-  const username = (process.env.ADMIN_USERNAME || db.admin?.username || 'admin').trim();
+  const username = (process.env.ADMIN_USERNAME || DEFAULT_ADMIN_USERNAME).trim();
+  const fromEnv = Boolean(process.env.ADMIN_PASSWORD);
   const password = process.env.ADMIN_PASSWORD || generatePassword(12);
-  const generated = !process.env.ADMIN_PASSWORD;
 
   mutateDatabase((d) => {
     d.admin = { username, passwordHash: hashPassword(password), updatedAt: new Date().toISOString() };
   });
   saveDatabaseSync();
 
-  if (generated) writeAdminCredentialsFile(username, password);
+  if (!fromEnv) writeAdminCredentialsFile(username, password);
   console.log('========================================================');
-  console.log(' [Ilm+] Administrator hisobi yaratildi');
+  console.log(' [Ilm+] Administrator hisobi o\'rnatildi');
   console.log(`   Login: ${username}`);
-  console.log(`   Parol: ${generated ? password : '(ADMIN_PASSWORD muhit o\'zgaruvchisidan olindi)'}`);
-  if (generated) console.log(`   (nusxasi: ${ADMIN_CREDENTIALS_FILE})`);
+  console.log(`   Parol: ${fromEnv ? '(ADMIN_PASSWORD muhit o\'zgaruvchisidan olindi)' : password}`);
+  if (!fromEnv) console.log(`   (nusxasi: ${ADMIN_CREDENTIALS_FILE})`);
   console.log('========================================================');
   return { username, password };
 }

@@ -19,7 +19,7 @@ echo Frontend yig'ilmoqda...
 call npm run build || goto :error
 echo.
 echo Brauzer ochilmoqda: http://localhost:5000
-echo Birinchi ishga tushirishda admin login va paroli quyida chiqadi
+echo Admin login: OTKTF. Parol birinchi ishga tushirishda quyida chiqadi
 echo (nusxasi: backend\data\ADMIN_PAROL.txt).
 echo.
 start "" http://localhost:5000
