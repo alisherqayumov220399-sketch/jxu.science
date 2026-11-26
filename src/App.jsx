@@ -1,31 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownToLine, ArrowUpRight, Bell, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Download, Eye, FileCheck, FileText, KeyRound, LayoutDashboard, LockKeyhole, LogOut, Menu, Pencil, Plus, RefreshCw, RotateCcw, Search, Settings2, Sheet, ShieldCheck, Trash2, Upload, UsersRound, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpRight, Bell, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, ClipboardCheck, Copy, Database, Download, Eye, FileCheck, FileText, KeyRound, LayoutDashboard, LockKeyhole, LogOut, Menu, Pencil, Plus, RefreshCw, Search, Settings2, Sheet, ShieldCheck, Trash2, Upload, UsersRound, X } from 'lucide-react'
 import readXlsxFile from 'read-excel-file/browser'
 import writeXlsxFile from 'write-excel-file/browser'
 import ExpertiseView from './components/ExpertiseView.jsx'
 import NizomView from './components/NizomView.jsx'
-import { INITIAL_EXPERTISE_CASES, REQUIRED_DOCUMENTS } from './data/expertiseData.js'
+import { REQUIRED_DOCUMENTS } from './data/expertiseData.js'
 import { STUDY_PLANS } from './data/studyPlanData.js'
 import { KengashStudentView, KengashAdminView } from './components/KengashView.jsx'
 import { PostDefenseStudentView, PostDefenseAdminView } from './components/PostDefenseView.jsx'
 import ExecutiveDashboard from './components/ExecutiveDashboard.jsx'
 import {
-  INITIAL_RESEARCHERS,
-  INITIAL_ACCOUNTS,
-  INITIAL_MONITORING_REPORTS,
-  INITIAL_MONITORING_FILES,
-  INITIAL_KENGASH_FILES,
-  INITIAL_POST_DEFENSE_FILES,
-  INITIAL_ACTIVITY_LOG
-} from './data/initialData.js'
-import {
+  changePassword,
+  downloadBackup,
+  fetchCurrentUser,
+  flushServerChanges,
   fetchServerSync,
-  pushServerSync,
-  startLiveSync,
-  uploadRealFile,
+  getToken,
+  loginRequest,
+  logout as apiLogout,
+  onConnectionChange,
+  onUnauthorized,
   openOrDownloadFile,
-  onConnectionChange
+  pushServerChanges,
+  restoreBackup,
+  startLiveSync,
+  uploadRealFile
 } from './api/apiService'
+import { applyDiff, computeDiff, rebase } from './utils/syncDiff.js'
+import { uid } from './utils/id.js'
 import './App.css'
 
 function readRoute() {
@@ -172,9 +174,16 @@ function makeCredentials(name, existingAccounts) {
   while (usernames.has(username)) username = `${base}${suffix++}`
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%'
   const random = new Uint8Array(14)
-  window.crypto.getRandomValues(random)
+  globalThis.crypto.getRandomValues(random)
   const password = Array.from(random, (value) => alphabet[value % alphabet.length]).join('')
   return { username, password }
+}
+
+const COLLECTION_KEYS = ['accounts', 'researchers', 'expertiseCases', 'monitoringFiles', 'monitoringReports', 'kengashFiles', 'postDefenseFiles', 'activityLog', 'normativeDocuments']
+const ACTIVITY_LOG_LIMIT = 50
+
+function nowTime() {
+  return new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 function getPaginationRange(currentPage, totalPages) {
@@ -236,222 +245,227 @@ function App() {
   const [newField, setNewField] = useState('')
   const [newStage, setNewStage] = useState('1')
 
-  // Accounts state - Single Source of Truth
-  const [accounts, setAccounts] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_accounts')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return INITIAL_ACCOUNTS
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_accounts', JSON.stringify(accounts)) } catch { }
-  }, [accounts])
-
-  // Researchers state - Single Source of Truth
-  const [researchers, setResearchers] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_researchers')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return INITIAL_RESEARCHERS
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_researchers', JSON.stringify(researchers)) } catch { }
-  }, [researchers])
-
-  // Expertise Cases state - Single Source of Truth
-  const [expertiseCases, setExpertiseCases] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_expertise_cases')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return INITIAL_EXPERTISE_CASES
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_expertise_cases', JSON.stringify(expertiseCases)) } catch { }
-  }, [expertiseCases])
-
-  // Monitoring files state
-  const [monitoringFiles, setMonitoringFiles] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_monitoring_files')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return INITIAL_MONITORING_FILES
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_monitoring_files', JSON.stringify(monitoringFiles)) } catch { }
-  }, [monitoringFiles])
-
-  // Monitoring reports state
-  const [monitoringReports, setMonitoringReports] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_monitoring_reports')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return INITIAL_MONITORING_REPORTS
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_monitoring_reports', JSON.stringify(monitoringReports)) } catch { }
-  }, [monitoringReports])
-
-  // Kengash files state
-  const [kengashFiles, setKengashFiles] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_kengash_files')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return INITIAL_KENGASH_FILES
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_kengash_files', JSON.stringify(kengashFiles)) } catch { }
-  }, [kengashFiles])
-
-  // Post defense files state
-  const [postDefenseFiles, setPostDefenseFiles] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_post_defense_files')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return INITIAL_POST_DEFENSE_FILES
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_post_defense_files', JSON.stringify(postDefenseFiles)) } catch { }
-  }, [postDefenseFiles])
-
-  // Activity log state
-  const [activityLog, setActivityLog] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_activity_log')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return INITIAL_ACTIVITY_LOG
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_activity_log', JSON.stringify(activityLog)) } catch { }
-  }, [activityLog])
+  // Server ma'lumotlari (yagona manba — server; brauzerda saqlanmaydi)
+  const [accounts, setAccounts] = useState([])
+  const [researchers, setResearchers] = useState([])
+  const [expertiseCases, setExpertiseCases] = useState([])
+  const [monitoringFiles, setMonitoringFiles] = useState([])
+  const [monitoringReports, setMonitoringReports] = useState([])
+  const [kengashFiles, setKengashFiles] = useState([])
+  const [postDefenseFiles, setPostDefenseFiles] = useState([])
+  const [activityLog, setActivityLog] = useState([])
+  const [normativeDocuments, setNormativeDocuments] = useState([])
 
   const [credentialResult, setCredentialResult] = useState([])
   const [credentialModalOpen, setCredentialModalOpen] = useState(false)
   const [selectedResearcher, setSelectedResearcher] = useState(null)
   const [editingResearcher, setEditingResearcher] = useState(null)
-  const [normativeDocuments, setNormativeDocuments] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ilm_normative_docs')
-      if (saved) return JSON.parse(saved)
-    } catch { }
-    return []
-  })
-  useEffect(() => {
-    try { localStorage.setItem('ilm_normative_docs', JSON.stringify(normativeDocuments)) } catch { }
-  }, [normativeDocuments])
 
-  // Live Server Sync states
+  const setters = useMemo(() => ({
+    accounts: setAccounts,
+    researchers: setResearchers,
+    expertiseCases: setExpertiseCases,
+    monitoringFiles: setMonitoringFiles,
+    monitoringReports: setMonitoringReports,
+    kengashFiles: setKengashFiles,
+    postDefenseFiles: setPostDefenseFiles,
+    activityLog: setActivityLog,
+    normativeDocuments: setNormativeDocuments
+  }), [])
+
+  // Autentifikatsiya va sinxronizatsiya holati
+  const [authUser, setAuthUser] = useState(null)
+  const [authChecked, setAuthChecked] = useState(() => !getToken())
+  const [dataLoaded, setDataLoaded] = useState(false)
   const [isOnline, setIsOnline] = useState(true)
   const [lastSyncTime, setLastSyncTime] = useState('')
   const [isSyncing, setIsSyncing] = useState(false)
-  const isRemoteUpdate = useRef(false)
-  const initialLoadDone = useRef(false)
-
-  // Listen to network status
-  useEffect(() => {
-    return onConnectionChange(setIsOnline)
-  }, [])
-
-  // Manual or initial data sync
-  const doFetchSync = useCallback(async () => {
-    setIsSyncing(true)
-    const res = await fetchServerSync()
-    if (res.success && res.data) {
-      isRemoteUpdate.current = true
-      if (Array.isArray(res.data.accounts)) setAccounts(res.data.accounts)
-      if (Array.isArray(res.data.researchers)) setResearchers(res.data.researchers)
-      if (Array.isArray(res.data.expertiseCases)) setExpertiseCases(res.data.expertiseCases)
-      if (Array.isArray(res.data.monitoringFiles)) setMonitoringFiles(res.data.monitoringFiles)
-      if (Array.isArray(res.data.monitoringReports)) setMonitoringReports(res.data.monitoringReports)
-      if (Array.isArray(res.data.kengashFiles)) setKengashFiles(res.data.kengashFiles)
-      if (Array.isArray(res.data.postDefenseFiles)) setPostDefenseFiles(res.data.postDefenseFiles)
-      if (Array.isArray(res.data.activityLog)) setActivityLog(res.data.activityLog)
-      if (Array.isArray(res.data.normativeDocuments)) setNormativeDocuments(res.data.normativeDocuments)
-      setLastSyncTime(new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
-      setTimeout(() => { isRemoteUpdate.current = false }, 120)
-    }
-    setIsSyncing(false)
-    initialLoadDone.current = true
-  }, [])
-
-  // Start live sync subscription
-  useEffect(() => {
-    doFetchSync()
-    const unsub = startLiveSync((remoteData) => {
-      isRemoteUpdate.current = true
-      if (Array.isArray(remoteData.accounts)) setAccounts(remoteData.accounts)
-      if (Array.isArray(remoteData.researchers)) setResearchers(remoteData.researchers)
-      if (Array.isArray(remoteData.expertiseCases)) setExpertiseCases(remoteData.expertiseCases)
-      if (Array.isArray(remoteData.monitoringFiles)) setMonitoringFiles(remoteData.monitoringFiles)
-      if (Array.isArray(remoteData.monitoringReports)) setMonitoringReports(remoteData.monitoringReports)
-      if (Array.isArray(remoteData.kengashFiles)) setKengashFiles(remoteData.kengashFiles)
-      if (Array.isArray(remoteData.postDefenseFiles)) setPostDefenseFiles(remoteData.postDefenseFiles)
-      if (Array.isArray(remoteData.activityLog)) setActivityLog(remoteData.activityLog)
-      if (Array.isArray(remoteData.normativeDocuments)) setNormativeDocuments(remoteData.normativeDocuments)
-      setLastSyncTime(new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
-      setTimeout(() => { isRemoteUpdate.current = false }, 120)
-    })
-    return unsub
-  }, [doFetchSync])
-
-  // Automatic push to server on local state modifications
-  useEffect(() => {
-    if (!initialLoadDone.current || isRemoteUpdate.current) return
-    const timer = setTimeout(() => {
-      pushServerSync({
-        accounts,
-        researchers,
-        expertiseCases,
-        monitoringFiles,
-        monitoringReports,
-        kengashFiles,
-        postDefenseFiles,
-        activityLog,
-        normativeDocuments
-      }).then((res) => {
-        if (res.success) {
-          setLastSyncTime(new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
-        }
-      })
-    }, 600)
-    return () => clearTimeout(timer)
-  }, [accounts, researchers, expertiseCases, monitoringFiles, monitoringReports, kengashFiles, postDefenseFiles, activityLog, normativeDocuments])
+  const [syncError, setSyncError] = useState('')
+  const [pushTick, setPushTick] = useState(0)
+  const snapshotRef = useRef(null) // serverdagi oxirgi ma'lum holat
+  const revisionRef = useRef(0)
+  const pushInFlight = useRef(false)
 
   const [normativeError, setNormativeError] = useState('')
   const normativeInputRef = useRef(null)
   const [importError, setImportError] = useState('')
   const [loginError, setLoginError] = useState('')
   const importInputRef = useRef(null)
+  const restoreInputRef = useRef(null)
 
-  const [authUser, setAuthUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ilm_auth')) } catch { return null }
+  useEffect(() => onConnectionChange(setIsOnline), [])
+
+  const resetSession = useCallback((message = '') => {
+    apiLogout()
+    snapshotRef.current = null
+    revisionRef.current = 0
+    for (const key of COLLECTION_KEYS) setters[key]([])
+    setDataLoaded(false)
+    setAuthUser(null)
+    setSelectedResearcher(null)
+    setEditingResearcher(null)
+    setCredentialResult([])
+    setCredentialModalOpen(false)
+    setLoginError(message)
+  }, [setters])
+
+  useEffect(() => {
+    onUnauthorized(() => resetSession('Sessiya muddati tugadi. Iltimos, qayta kiring.'))
+    return () => onUnauthorized(null)
+  }, [resetSession])
+
+  /** Serverdan kelgan ma'lumotni qo'llash (yuborilmagan mahalliy o'zgarishlar saqlanib qoladi). */
+  const applyServerData = useCallback((data, revision) => {
+    const prevSnapshot = snapshotRef.current
+    const nextSnapshot = { ...(prevSnapshot || {}) }
+    for (const key of COLLECTION_KEYS) {
+      if (!Array.isArray(data?.[key])) continue
+      const remote = data[key]
+      const base = prevSnapshot?.[key]
+      nextSnapshot[key] = remote
+      setters[key]((local) => (base ? rebase(key, local, base, remote) : remote))
+    }
+    snapshotRef.current = nextSnapshot
+    revisionRef.current = revision
+    setDataLoaded(true)
+    setLastSyncTime(nowTime())
+  }, [setters])
+
+  const doFetchSync = useCallback(async () => {
+    if (!getToken()) return
+    setIsSyncing(true)
+    try {
+      const { revision, data } = await fetchServerSync()
+      applyServerData(data, revision)
+      setSyncError('')
+    } catch (error) {
+      setSyncError(error.message)
+    } finally {
+      setIsSyncing(false)
+    }
+  }, [applyServerData])
+
+  // Saqlangan token bo'lsa, foydalanuvchini tiklash
+  useEffect(() => {
+    if (!getToken()) return
+    let cancelled = false
+    fetchCurrentUser()
+      .then((user) => { if (!cancelled) setAuthUser(user) })
+      .catch((error) => { if (!cancelled && error.status !== 401) setLoginError(error.message) })
+      .finally(() => { if (!cancelled) setAuthChecked(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  // Kirgandan so'ng ma'lumotlarni yuklash va jonli sinxronizatsiyani yoqish
+  useEffect(() => {
+    if (!authUser) return
+    doFetchSync()
+    return startLiveSync(() => revisionRef.current, () => doFetchSync())
+  }, [authUser, doFetchSync])
+
+  // Mahalliy o'zgarishlarni serverga yuborish (faqat o'zgargan yozuvlar)
+  const latestDataRef = useRef(null)
+  useEffect(() => {
+    latestDataRef.current = { accounts, researchers, expertiseCases, monitoringFiles, monitoringReports, kengashFiles, postDefenseFiles, activityLog, normativeDocuments }
   })
-  const updateAuthUser = (user) => {
-    setAuthUser(user)
-    if (user) {
-      try { localStorage.setItem('ilm_auth', JSON.stringify(user)) } catch { }
-    } else {
-      try { localStorage.removeItem('ilm_auth') } catch { }
+
+  const collectPendingChanges = useCallback((current) => {
+    const changes = {}
+    if (!snapshotRef.current || !current) return changes
+    for (const key of COLLECTION_KEYS) {
+      const diff = computeDiff(key, snapshotRef.current[key] || [], current[key])
+      if (diff) changes[key] = diff
+    }
+    return changes
+  }, [])
+
+  // Sahifa yopilayotganda/yangilanayotganda hali yuborilmagan o'zgarishlarni jo'natish
+  useEffect(() => {
+    if (!authUser || !dataLoaded) return
+    const flush = () => {
+      if (pushInFlight.current) return
+      const changes = collectPendingChanges(latestDataRef.current)
+      if (Object.keys(changes).length) flushServerChanges(changes)
+    }
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [authUser, dataLoaded, collectPendingChanges])
+
+  useEffect(() => {
+    if (!authUser || !dataLoaded) return
+    const current = { accounts, researchers, expertiseCases, monitoringFiles, monitoringReports, kengashFiles, postDefenseFiles, activityLog, normativeDocuments }
+    const timer = setTimeout(async () => {
+      if (pushInFlight.current || !snapshotRef.current) return
+      const changes = collectPendingChanges(current)
+      if (!Object.keys(changes).length) return
+
+      pushInFlight.current = true
+      setIsSyncing(true)
+      let succeeded = false
+      try {
+        const result = await pushServerChanges(changes)
+        const snapshot = { ...snapshotRef.current }
+        for (const key of Object.keys(changes)) snapshot[key] = applyDiff(key, snapshot[key] || [], changes[key])
+        snapshotRef.current = snapshot
+        const someoneElseChanged = result.previousRevision !== revisionRef.current
+        revisionRef.current = result.revision
+        if (someoneElseChanged || result.rejected) doFetchSync()
+        setSyncError('')
+        setLastSyncTime(nowTime())
+        succeeded = true
+      } catch (error) {
+        setSyncError(`Saqlanmadi: ${error.message}`)
+      } finally {
+        pushInFlight.current = false
+        setIsSyncing(false)
+        if (succeeded) setPushTick((tick) => tick + 1)
+        else setTimeout(() => setPushTick((tick) => tick + 1), 5000)
+      }
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [authUser, dataLoaded, accounts, researchers, expertiseCases, monitoringFiles, monitoringReports, kengashFiles, postDefenseFiles, activityLog, normativeDocuments, pushTick, doFetchSync, collectPendingChanges])
+
+  async function handleLogin(role, username, password) {
+    setLoginError('')
+    try {
+      const user = await loginRequest(username.trim(), password, role)
+      setAuthUser(user)
+    } catch (error) {
+      setLoginError(error.message)
     }
   }
 
-  function logActivity(name, action) {
-    setActivityLog((items) => [{ id: crypto.randomUUID(), name, action, time: new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' }) }, ...items].slice(0, 10))
+  function handleLogout() {
+    resetSession('')
   }
+
+  // Tadqiqotchi profili: admin o'zgartirgan bosqich/ism darhol aks etadi
+  const researcherUser = useMemo(() => {
+    if (!authUser || authUser.role !== 'researcher') return authUser
+    const account = accounts.find((a) => a.username === authUser.username)
+    const profile = researchers.find((r) => r.username === authUser.username)
+    const researcherName = account?.researcherName || profile?.name || authUser.researcherName
+    return {
+      ...authUser,
+      researcherName,
+      name: researcherName,
+      stage: Number(account?.stage || profile?.stage || authUser.stage || 1),
+      field: profile?.field || authUser.field,
+      supervisor: profile?.supervisor || authUser.supervisor
+    }
+  }, [authUser, accounts, researchers])
+
+  function logActivity(name, action) {
+    setActivityLog((items) => [{ id: uid('act'), name, action, time: new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' }) }, ...items].slice(0, ACTIVITY_LOG_LIMIT))
+  }
+
 
   const labels = {
     uz: ['Umumiy ko‘rinish', 'Izlanuvchilar', 'Monitoring', 'Hisobotlar', 'Tahlil va statistika', 'Sozlamalar', 'Ilmiy faoliyat monitoringi', 'Xayrli kun', 'Izlanuvchi qo‘shish', 'Jami izlanuvchilar', 'Reja bo‘yicha', 'Ko‘rib chiqish kerak', 'Bu chorakda topshirildi', 'Umumiy bajarilish', 'So‘nggi faollik', 'Izlanuvchilar ro‘yxati', 'Ilmiy yo‘nalish', 'Ilmiy rahbar', 'Bajarilish', 'Holati', 'Jarayonda', 'Tasdiq kutilmoqda', 'E’tibor kerak', 'Yaqin muddatlar', 'Filtr', 'Eksport', 'Barchasi'],
     ru: ['Обзор', 'Соискатели', 'Мониторинг', 'Отчёты', 'Аналитика', 'Настройки', 'Мониторинг научной деятельности', 'Добрый день', 'Добавить соискателя', 'Всего соискателей', 'По плану', 'Требуют проверки', 'Сдано в этом квартале', 'Общий прогресс', 'Последняя активность', 'Список соискателей', 'Научное направление', 'Руководитель', 'Выполнение', 'Статус', 'В процессе', 'Ожидает подтверждения', 'Требует внимания', 'Ближайшие сроки', 'Фильтр', 'Экспорт', 'Все'],
     en: ['Overview', 'Researchers', 'Monitoring', 'Reports', 'Analytics', 'Settings', 'Research activity monitoring', 'Good day', 'Add researcher', 'Total researchers', 'On track', 'Needs review', 'Submitted this quarter', 'Overall completion', 'Recent activity', 'Researchers', 'Research area', 'Supervisor', 'Progress', 'Status', 'In progress', 'Awaiting approval', 'Needs attention', 'Upcoming deadlines', 'Filter', 'Export', 'All'],
   }
-  const [overview, people, plans, reports, analytics, settings, intro, , add, , , , , , , peopleList, fieldLabel, supervisorLabel, progressLabel, statusLabel, , , , , filterLabel, exportLabel] = labels[locale] || labels.uz
+  const [overview, people, plans, reports, analytics, settings, intro, , add, , , , , , , peopleList, fieldLabel, supervisorLabel, progressLabel, statusLabel, , , , , filterLabel, exportLabel, allLabel] = labels[locale] || labels.uz
 
   const currentTitle = {
     overview,
@@ -629,25 +643,45 @@ function App() {
     setEditingResearcher(null)
   }
 
-  function restoreDemoData() {
-    if (!window.confirm("Barcha namunaviy ma'lumotlarni qayta tiklashni xohlaysizmi? Mavjud kiritilgan test ma'lumotlar asl holiga qaytadi.")) return
-    setResearchers(INITIAL_RESEARCHERS)
-    setAccounts(INITIAL_ACCOUNTS)
-    setExpertiseCases(INITIAL_EXPERTISE_CASES)
-    setMonitoringFiles(INITIAL_MONITORING_FILES)
-    setMonitoringReports(INITIAL_MONITORING_REPORTS)
-    setKengashFiles(INITIAL_KENGASH_FILES)
-    setPostDefenseFiles(INITIAL_POST_DEFENSE_FILES)
-    setActivityLog(INITIAL_ACTIVITY_LOG)
-    localStorage.setItem('ilm_researchers', JSON.stringify(INITIAL_RESEARCHERS))
-    localStorage.setItem('ilm_accounts', JSON.stringify(INITIAL_ACCOUNTS))
-    localStorage.setItem('ilm_expertise_cases', JSON.stringify(INITIAL_EXPERTISE_CASES))
-    localStorage.setItem('ilm_monitoring_files', JSON.stringify(INITIAL_MONITORING_FILES))
-    localStorage.setItem('ilm_monitoring_reports', JSON.stringify(INITIAL_MONITORING_REPORTS))
-    localStorage.setItem('ilm_kengash_files', JSON.stringify(INITIAL_KENGASH_FILES))
-    localStorage.setItem('ilm_post_defense_files', JSON.stringify(INITIAL_POST_DEFENSE_FILES))
-    localStorage.setItem('ilm_activity_log', JSON.stringify(INITIAL_ACTIVITY_LOG))
-    alert("Namunaviy ma'lumotlar muvaffaqiyatli tiklandi!")
+  function regenerateAllPasswords() {
+    const researcherAccounts = accounts.filter((a) => a.role === 'researcher' || a.researcherName)
+    if (!researcherAccounts.length) {
+      alert('Tizimda izlanuvchi hisoblari mavjud emas.')
+      return
+    }
+    if (!window.confirm(`Barcha ${researcherAccounts.length} ta izlanuvchi uchun yangi parollar yaratilsinmi? Eski parollar ishlamay qoladi, yangilarini izlanuvchilarga qayta tarqatishingiz kerak bo‘ladi.`)) return
+    const updated = new Map()
+    for (const account of researcherAccounts) {
+      updated.set(account.username, { ...account, password: makeCredentials(account.username, []).password })
+    }
+    setAccounts((items) => items.map((a) => updated.get(a.username) || a))
+    setCredentialResult([...updated.values()])
+    setCredentialModalOpen(true)
+    logActivity('Administrator', `Barcha izlanuvchilar parollari yangilandi (${updated.size} ta)`)
+  }
+
+  async function handleBackupDownload() {
+    try {
+      await downloadBackup()
+    } catch (error) {
+      alert(error.message)
+    }
+  }
+
+  async function handleRestoreFile(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const data = JSON.parse(await file.text())
+      if (!window.confirm('Joriy baza zaxira nusxadagi ma’lumotlar bilan to‘liq almashtiriladi. Davom etasizmi?')) return
+      await restoreBackup(data)
+      snapshotRef.current = null
+      await doFetchSync()
+      alert('Baza zaxira nusxadan muvaffaqiyatli tiklandi.')
+    } catch (error) {
+      alert(`Zaxirani tiklab bo‘lmadi: ${error.message}`)
+    }
   }
 
   async function uploadNormativeDocuments(event) {
@@ -664,7 +698,7 @@ function App() {
       try {
         const uploadRes = await uploadRealFile(file, 'Normativ hujjatlar')
         const newDoc = {
-          id: crypto.randomUUID(),
+          id: uid('norm'),
           name: file.name,
           size: file.size,
           fileUrl: uploadRes.fileUrl,
@@ -796,7 +830,7 @@ function App() {
         { value: String(item.researcherName || item.name || res?.name || '').trim() },
         { value: `${item.stage || res?.stage || 1}-bosqich`, align: 'center' },
         { value: String(item.username || '').trim() },
-        { value: String(item.password || 'otktf2026').trim() },
+        { value: String(item.password || '').trim() },
         { value: String(res?.department || item.department || 'Biriktirilmagan').trim() },
         { value: String(res?.supervisor || item.supervisor || 'Biriktirilmagan').trim() }
       ];
@@ -819,7 +853,6 @@ function App() {
           { width: 30 }
         ]
       }).toFile(fileName);
-      addActivityLog(`Izlanuvchilar login va parollari Excel fayl shaklida yuklab olindi (${listToExport.length} ta)`);
     } catch (err) {
       console.error('Excel yozishda xatolik:', err);
       try {
@@ -832,7 +865,7 @@ function App() {
               String(item.researcherName || item.name || res?.name || ''),
               `${item.stage || res?.stage || 1}-bosqich`,
               String(item.username || ''),
-              String(item.password || 'otktf2026'),
+              String(item.password || ''),
               String(res?.department || item.department || ''),
               String(res?.supervisor || item.supervisor || '')
             ];
@@ -847,40 +880,35 @@ function App() {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       } catch (fallbackErr) {
         alert('Excel faylni saqlashda xatolik yuz berdi: ' + (err.message || fallbackErr.message));
+        return;
       }
     }
+    logActivity('Administrator', `Izlanuvchilar login va parollari Excel fayl shaklida yuklab olindi (${listToExport.length} ta)`);
   }
 
   // Backward compatibility alias
   const saveCredentials = exportCredentialsToExcel;
 
+  if (!authChecked) {
+    return <LoadingScreen text="Tizimga ulanilmoqda..." />
+  }
+
   if (!authUser) {
-    return <UnifiedLogin onLogin={(role, username, password) => {
-      if (role === 'admin') {
-        if (username === 'JXUOTKTF' && password === 'otktf202') {
-          setLoginError('')
-          updateAuthUser({ role: 'admin' })
-        } else {
-          setLoginError('Admin logini yoki parol noto‘g‘ri.')
-        }
-      } else {
-        const account = accounts.find((item) => item.username === username.trim() && item.password === password)
-        if (account) {
-          setLoginError('')
-          updateAuthUser({ role: 'researcher', ...account })
-        } else setLoginError('Tadqiqotchi logini yoki parol noto‘g‘ri.')
-      }
-    }} error={loginError} locale={locale} />
+    return <UnifiedLogin onLogin={handleLogin} error={loginError} locale={locale} />
+  }
+
+  if (!dataLoaded) {
+    return <LoadingScreen text={syncError ? `Ma’lumotlarni yuklab bo‘lmadi: ${syncError}` : 'Ma’lumotlar yuklanmoqda...'} onRetry={syncError ? doFetchSync : null} onLogout={handleLogout} />
   }
 
   if (authUser.role === 'researcher') {
-    return <ResearcherWorkspace user={authUser} normativeDocuments={normativeDocuments} expertiseCases={expertiseCases} setExpertiseCases={setExpertiseCases} onLogout={() => updateAuthUser(null)} monitoringFiles={monitoringFiles} setMonitoringFiles={setMonitoringFiles} monitoringReports={monitoringReports} setMonitoringReports={setMonitoringReports} kengashFiles={kengashFiles} setKengashFiles={setKengashFiles} postDefenseFiles={postDefenseFiles} setPostDefenseFiles={setPostDefenseFiles} theme={theme} setTheme={setTheme} accounts={accounts} setAccounts={setAccounts} updateAuthUser={updateAuthUser} locale={locale} setLocale={setLocale} isOnline={isOnline} lastSyncTime={lastSyncTime} isSyncing={isSyncing} doFetchSync={doFetchSync} />
+    return <ResearcherWorkspace user={researcherUser} normativeDocuments={normativeDocuments} expertiseCases={expertiseCases} setExpertiseCases={setExpertiseCases} onLogout={handleLogout} monitoringFiles={monitoringFiles} setMonitoringFiles={setMonitoringFiles} monitoringReports={monitoringReports} setMonitoringReports={setMonitoringReports} kengashFiles={kengashFiles} setKengashFiles={setKengashFiles} postDefenseFiles={postDefenseFiles} setPostDefenseFiles={setPostDefenseFiles} theme={theme} setTheme={setTheme} locale={locale} setLocale={setLocale} isOnline={isOnline} lastSyncTime={lastSyncTime} isSyncing={isSyncing} syncError={syncError} doFetchSync={doFetchSync} />
   }
 
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? 'sidebar-open' : ''}`}>
-      <a className="brand" href="#overview" onClick={() => setPage('overview')}><img src="./logo.jpg" alt="Logo" className="brand-logo" /><span className="brand-name">{locale === 'ru' ? 'Республика Узбекистан' : locale === 'en' ? 'Republic of Uzbekistan' : 'O‘zbekiston Respublikasi'}<br />{locale === 'ru' ? 'Университет общественной безопасности' : locale === 'en' ? 'University of Public Safety' : 'Jamoat xavfsizligi universiteti'}<br />{locale === 'ru' ? 'Факультет послевузовского образования' : locale === 'en' ? 'Faculty of Postgraduate Education' : 'Oliy ta\'limdan keyingi ta\'lim fakulteti'}</span></a>
-      <div className="workspace-label" style={{ fontSize: '20px', fontWeight: '900', color: '#fff' }}>{locale === 'ru' ? 'НАУЧНАЯ ДЕЯТЕЛЬНОСТЬ' : locale === 'en' ? 'RESEARCH ACTIVITY' : 'ILMIY FAOLIYAT'}</div>
+      <BrandMark locale={locale} variant="sidebar" onClick={() => { setPage('overview'); setMobileNavOpen(false) }} />
+      <div className="workspace-label">{locale === 'ru' ? 'Научная деятельность' : locale === 'en' ? 'Research activity' : 'Ilmiy faoliyat'}</div>
 
       <nav className="side-nav" aria-label="Asosiy navigatsiya">
         {navItemsBefore.map(({ key, title, icon: Icon, badge }) => <button key={key} type="button" className={`nav-item ${page === key ? 'nav-active' : ''}`} onClick={() => { setPage(key); setMobileNavOpen(false) }}><Icon size={18} /><span>{title}</span>{badge ? <i className="nav-count">{badge}</i> : null}</button>)}
@@ -910,7 +938,7 @@ function App() {
         </button>
         {navItemsAfter.map(({ key, title, icon: Icon, badge }) => <button key={key} type="button" className={`nav-item ${page === key ? 'nav-active' : ''}`} onClick={() => { setPage(key); setMobileNavOpen(false) }}><Icon size={18} /><span>{title}</span>{badge ? <i className="nav-count">{badge}</i> : null}</button>)}
       </nav>
-      <div className="sidebar-bottom"><button className="nav-item settings-item" onClick={() => setPage('settings')}><Settings2 size={18} /><span>{settings}</span></button><button className="profile-button" onClick={() => updateAuthUser(null)}><span className="avatar avatar-admin">A</span><span className="profile-info"><strong>{locale === 'ru' ? 'Администратор' : locale === 'en' ? 'Administrator' : 'Administrator'}</strong><small>{locale === 'ru' ? 'Выход' : locale === 'en' ? 'Logout' : 'Tizimdan chiqish'}</small></span><LogOut size={15} /></button></div>
+      <div className="sidebar-bottom"><button className="nav-item settings-item" onClick={() => setPage('settings')}><Settings2 size={18} /><span>{settings}</span></button><button className="profile-button" onClick={handleLogout}><span className="avatar avatar-admin">A</span><span className="profile-info"><strong>{locale === 'ru' ? 'Администратор' : locale === 'en' ? 'Administrator' : 'Administrator'}</strong><small>{locale === 'ru' ? 'Выход' : locale === 'en' ? 'Logout' : 'Tizimdan chiqish'}</small></span><LogOut size={15} /></button></div>
     </aside>
     {mobileNavOpen && <button className="nav-scrim" aria-label="Menyuni yopish" onClick={() => setMobileNavOpen(false)} />}
     <main className="main-area">
@@ -918,17 +946,11 @@ function App() {
         <button className="mobile-menu icon-button" aria-label="Menyuni ochish" onClick={() => setMobileNavOpen(true)}><Menu size={20} /></button>
         <div className="breadcrumb"><span>{locale === 'ru' ? 'Научная деятельность' : locale === 'en' ? 'Research Activity' : 'Ilmiy faoliyat'}</span><ChevronRight size={14} /><strong>{currentTitle}</strong></div>
         <div className="topbar-actions">
-          <div className="live-sync-indicator" title={isOnline ? `Serverga ulangan. So'nggi sinxron: ${lastSyncTime || 'Biroz oldin'}` : "Internet yoki serverga ulanmagan"} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, background: isOnline ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)', border: `1px solid ${isOnline ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`, fontSize: 12, color: isOnline ? '#16a34a' : '#dc2626' }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: isOnline ? '#16a34a' : '#dc2626', display: 'inline-block' }} />
-            <span style={{ fontWeight: 600 }}>{isOnline ? (isSyncing ? 'Sinxronlanmoqda...' : 'Real-vaqt faol') : 'Oflayn'}</span>
-            <button className={`icon-button ${isSyncing ? 'spin' : ''}`} style={{ padding: 2, height: 'auto', width: 'auto', border: 'none', background: 'transparent', cursor: 'pointer' }} onClick={doFetchSync} title="Hozir sinxronlash">
-              <RefreshCw size={12} />
-            </button>
-          </div>
-          <label className="search-box"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={locale === 'en' ? 'Search researchers or topics' : locale === 'ru' ? 'Поиск по соискателю или теме' : 'Izlanuvchi yoki mavzu bo‘yicha qidirish'} /><kbd>⌘ K</kbd></label>
+          <SyncIndicator isOnline={isOnline} isSyncing={isSyncing} syncError={syncError} lastSyncTime={lastSyncTime} onSync={doFetchSync} />
+          <label className="search-box"><Search size={17} /><input value={query} onChange={(event) => { setQuery(event.target.value); if (page !== 'people') setPage('people') }} placeholder={locale === 'en' ? 'Search researchers or topics' : locale === 'ru' ? 'Поиск по соискателю или теме' : 'Izlanuvchi yoki mavzu bo‘yicha qidirish'} /></label>
           <div className="locale-picker" aria-label="Interfeys tili">{['uz', 'ru', 'en'].map((language) => <button key={language} className={locale === language ? 'locale-active' : ''} onClick={() => setLocale(language)}>{language.toUpperCase()}</button>)}</div>
           <div className="notification-wrap"><button className="icon-button notification-button" aria-label="Bildirishnomalar" onClick={() => setNotificationsOpen((open) => !open)}><Bell size={19} />{attentionResearchers.length > 0 && <i />}</button>{notificationsOpen && <div className="notification-popover"><strong>Monitoring ogohlantirishlari</strong>{attentionResearchers.length ? attentionResearchers.map(({ person, progress }) => <p key={person.username || person.name}><CircleAlert size={16} /> {person.name} · {progress}% bajarilgan</p>) : <p>Excel ma’lumotlarida e’tibor talab qiladigan holat topilmadi.</p>}</div>}</div>
-          <button className="avatar avatar-dilnoza top-avatar" aria-label="Profil">D</button>
+          <button className="avatar avatar-admin top-avatar" aria-label="Profil" title="Administrator" onClick={() => setPage('settings')}>A</button>
         </div>
       </header>
       <div className={`page-content ${page === 'overview' ? 'dashboard-page' : 'module-page-content'}`}>
@@ -1174,7 +1196,7 @@ function App() {
         {selectedResearcher && <ResearcherDetails researcher={selectedResearcher} accounts={accounts} onClose={() => setSelectedResearcher(null)} onEdit={() => { setEditingResearcher(selectedResearcher); setSelectedResearcher(null) }} onDelete={() => deleteResearcher(selectedResearcher)} locale={locale} navigateTo={navigateTo} />}
         {editingResearcher && <ResearcherEditDialog researcher={editingResearcher} onClose={() => setEditingResearcher(null)} onSave={saveResearcher} locale={locale} />}
 
-        {page === 'plans' && <AdminMonitoringView files={monitoringFiles} reports={monitoringReports} setReports={setMonitoringReports} researchers={researchers} selectedStage={stage} locale={locale} />}
+        {page === 'plans' && <AdminMonitoringView key={`plans-${stage}`} files={monitoringFiles} reports={monitoringReports} setReports={setMonitoringReports} researchers={researchers} selectedStage={stage} locale={locale} />}
         {page === 'seminar' && <div className="portal-content" style={{padding: '20px'}}><KengashAdminView kengashFiles={kengashFiles} setKengashFiles={setKengashFiles} researchers={researchers} isSeminar={true} locale={locale} /></div>}
         {page === 'kengash' && <div className="portal-content" style={{padding: '20px'}}><KengashAdminView kengashFiles={kengashFiles} setKengashFiles={setKengashFiles} researchers={researchers} locale={locale} /></div>}
         {page === 'post_defense' && <div className="portal-content" style={{padding: '20px'}}><PostDefenseAdminView postDefenseFiles={postDefenseFiles} setPostDefenseFiles={setPostDefenseFiles} researchers={researchers} locale={locale} /></div>}
@@ -1205,12 +1227,32 @@ function App() {
 
               <div className="settings-row" style={{borderTop: '1px solid #e2e8f0', marginTop: 15, paddingTop: 15}}>
                 <span>
-                  <strong style={{ color: '#0070f3' }}>Namunaviy ma'lumotlarni qayta tiklash</strong>
-                  <small>Barcha 8 ta izlanuvchi, hisobotlar, ekspertiza va kengash hujjatlarini asl holiga qaytaradi</small>
+                  <strong>Ma’lumotlar bazasining zaxira nusxasi</strong>
+                  <small>Barcha izlanuvchilar, hisoblar va hujjat yozuvlarini JSON fayl sifatida yuklab oling yoki zaxiradan tiklang</small>
                 </span>
-                <button className="secondary-button" type="button" onClick={restoreDemoData}>
-                  <RotateCcw size={15} /> Tiklash
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button className="secondary-button" type="button" onClick={handleBackupDownload}><Database size={15} /> Yuklab olish</button>
+                  <input ref={restoreInputRef} className="visually-hidden" type="file" accept=".json,application/json" onChange={handleRestoreFile} />
+                  <button className="secondary-button" type="button" onClick={() => restoreInputRef.current?.click()}><Upload size={15} /> Zaxiradan tiklash</button>
+                </div>
+              </div>
+
+              <div className="settings-row" style={{borderTop: '1px solid #e2e8f0', marginTop: 15, paddingTop: 15}}>
+                <span>
+                  <strong>Izlanuvchilar parollarini yangilash</strong>
+                  <small>Parollar oshkor bo‘lgan bo‘lsa, barcha izlanuvchilar uchun yangi parollar yaratib, Excel faylga yuklab oling</small>
+                </span>
+                <button className="secondary-button" type="button" onClick={regenerateAllPasswords}>
+                  <KeyRound size={15} /> Parollarni yangilash
                 </button>
+              </div>
+
+              <div className="settings-row" style={{borderTop: '1px solid #e2e8f0', marginTop: 15, paddingTop: 15, alignItems: 'flex-start'}}>
+                <span>
+                  <strong>Administrator paroli</strong>
+                  <small>Admin hisobining kirish parolini o‘zgartirish</small>
+                </span>
+                <PasswordChangeForm locale={locale} />
               </div>
 
               <div className="settings-row" style={{borderTop: '1px solid #ffebe9', marginTop: 15, paddingTop: 15}}>
@@ -1226,7 +1268,6 @@ function App() {
                     setMonitoringReports([]);
                     setKengashFiles([]);
                     setPostDefenseFiles([]);
-                    localStorage.clear();
                     setPage('overview');
                   }
                 }}><Trash2 size={15} />{locale === 'ru' ? 'Удалить все' : locale === 'en' ? 'Delete All' : 'Barchasini o‘chirish'}</button>
@@ -1238,7 +1279,7 @@ function App() {
                 <div>
                   <span className="section-kicker">TADQIQOTCHILAR UCHUN</span>
                   <h2>Ichki normativ hujjatlar</h2>
-                  <p>Yuklangan fayllar izlanuvchi kabinetida ko‘rinadi · PDF, DOC, DOCX · 10 MB gacha</p>
+                  <p>Yuklangan fayllar izlanuvchi kabinetida ko‘rinadi · PDF, DOC, DOCX · 30 MB gacha</p>
                 </div>
                 <input ref={normativeInputRef} className="visually-hidden" type="file" accept=".pdf,.doc,.docx" multiple onChange={uploadNormativeDocuments} />
                 <button className="primary-button" onClick={() => normativeInputRef.current?.click()}><Upload size={15} />Hujjat yuklash</button>
@@ -1272,8 +1313,8 @@ function App() {
           </div>
         )}
 
-        {page === 'expertise' && <ExpertiseView expertiseCases={expertiseCases} setExpertiseCases={setExpertiseCases} onNavigateNizom={() => navigateTo('nizom')} researchers={researchers} />}
-        {page === 'nizom' && <NizomView onNavigateExpertise={() => navigateTo('expertise')} />}
+        {page === 'expertise' && <ExpertiseView expertiseCases={expertiseCases} setExpertiseCases={setExpertiseCases} onNavigateNizom={() => navigateTo('nizom')} researchers={researchers} locale={locale} />}
+        {page === 'nizom' && <NizomView onNavigateExpertise={() => navigateTo('expertise')} locale={locale} />}
 
         <footer className="page-footer">
           <span>© 2026 Ilm+ · Jamoat xavfsizligi universiteti Oliy ta’limdan keyingi ta’lim monitoringi</span>
@@ -1335,14 +1376,14 @@ function ResearcherDetails({ researcher, accounts = [], onClose, onEdit, onDelet
             <div>
               <span style={{ fontSize: 11, color: '#1e40af', fontWeight: 700, display: 'block', textTransform: 'uppercase' }}>Tizimga kirish ma’lumotlari</span>
               <div style={{ fontSize: 12, color: '#1e293b', marginTop: 3 }}>
-                Login: <code style={{ color: '#0070f3', fontWeight: 600 }}>{userAccount.username}</code> · Parol: <code style={{ color: '#16a34a', fontWeight: 600 }}>{userAccount.password || 'otktf2026'}</code>
+                Login: <code style={{ color: '#0070f3', fontWeight: 600 }}>{userAccount.username}</code> · Parol: <code style={{ color: '#16a34a', fontWeight: 600 }}>{userAccount.password || '—'}</code>
               </div>
             </div>
             <button
               type="button"
               className="icon-button"
               onClick={() => {
-                navigator.clipboard?.writeText(`Login: ${userAccount.username}\nParol: ${userAccount.password || 'otktf2026'}`)
+                navigator.clipboard?.writeText(`Login: ${userAccount.username}\nParol: ${userAccount.password || '—'}`)
                 setCopiedCreds(true)
                 setTimeout(() => setCopiedCreds(false), 2000)
               }}
@@ -1480,17 +1521,24 @@ function UnifiedLogin({ onLogin, error, locale }) {
   const [role, setRole] = useState('researcher')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault()
-    onLogin(role, username, password)
+    if (busy) return
+    setBusy(true)
+    try {
+      await onLogin(role, username, password)
+    } finally {
+      setBusy(false)
+    }
   }
 
   return <main className="login-screen">
     <video autoPlay loop muted playsInline preload="metadata" poster="./logo.jpg" className="login-bg-video"><source src="./video.mp4" type="video/mp4" /></video>
     <div className="login-overlay"></div>
     <section className="login-panel">
-      <a className="login-brand" href="#overview"><img src="./logo.jpg" alt="Logo" className="brand-logo" /><span className="brand-name">{locale === 'ru' ? 'Республика Узбекистан' : locale === 'en' ? 'Republic of Uzbekistan' : 'O‘zbekiston Respublikasi'}<br />{locale === 'ru' ? 'Университет общественной безопасности' : locale === 'en' ? 'University of Public Safety' : 'Jamoat xavfsizligi universiteti'}<br />{locale === 'ru' ? 'Факультет послевузовского образования' : locale === 'en' ? 'Faculty of Postgraduate Education' : 'Oliy ta\'limdan keyingi ta\'lim fakulteti'}</span></a>
+      <BrandMark locale={locale} variant="login" onClick={(e) => e.preventDefault()} />
       <span className="section-kicker">{locale === 'ru' ? 'ВХОД В СИСТЕМУ' : locale === 'en' ? 'SYSTEM LOGIN' : 'TIZIMGA KIRISH'}</span>
       <h1>{locale === 'ru' ? 'Добро пожаловать' : locale === 'en' ? 'Welcome' : 'Xush kelibsiz'}</h1>
       
@@ -1499,72 +1547,142 @@ function UnifiedLogin({ onLogin, error, locale }) {
         <button type="button" className={`role-tab ${role === 'admin' ? 'active' : ''}`} onClick={() => { setRole('admin'); setUsername(''); setPassword(''); }}>{locale === 'ru' ? 'Администратор' : locale === 'en' ? 'Administrator' : 'Administrator'}</button>
       </div>
       
-      <p>{role === 'admin' ? "Boshqaruv paneliga kirish uchun admin parolini kiriting." : "Tizimga kirish uchun admin taqdim etgan login va parolni kiriting (Masalan: jasur.karimov / Karimov2026!)."}</p>
+      <p>{role === 'admin' ? "Boshqaruv paneliga kirish uchun admin login va parolini kiriting." : "Tizimga kirish uchun administrator taqdim etgan login va parolni kiriting."}</p>
       
       <form onSubmit={submit}>
-        <label>{locale === 'ru' ? 'Логин' : locale === 'en' ? 'Login' : 'Login'}<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required placeholder={role === 'admin' ? "Masalan: JXUOTKTF" : "Tadqiqotchi logini"} /></label>
+        <label>{locale === 'ru' ? 'Логин' : locale === 'en' ? 'Login' : 'Login'}<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required placeholder={role === 'admin' ? "Admin logini" : "Tadqiqotchi logini"} /></label>
         <label>{locale === 'ru' ? 'Пароль' : locale === 'en' ? 'Password' : 'Parol'}<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required placeholder={role === 'admin' ? "Admin paroli" : "Parol"} /></label>
         {error && <div className="login-error"><CircleAlert size={15} />{error}</div>}
-        <button className="primary-button" type="submit"><LockKeyhole size={16} />{locale === 'ru' ? 'Войти' : locale === 'en' ? 'Login' : 'Tizimga kirish'}</button>
+        <button className="primary-button" type="submit" disabled={busy}><LockKeyhole size={16} />{busy ? '...' : locale === 'ru' ? 'Войти' : locale === 'en' ? 'Login' : 'Tizimga kirish'}</button>
       </form>
     </section>
   </main>
 }
 
-function ResearcherWorkspace({ user, normativeDocuments, expertiseCases, setExpertiseCases, onLogout, monitoringFiles, setMonitoringFiles, monitoringReports, setMonitoringReports, kengashFiles, setKengashFiles, postDefenseFiles, setPostDefenseFiles, theme, setTheme, accounts, setAccounts, updateAuthUser, locale, setLocale, isOnline, lastSyncTime, isSyncing, doFetchSync }) {
+const BRAND_TEXT = {
+  uz: { country: 'O‘zbekiston Respublikasi', university: 'Jamoat xavfsizligi universiteti', faculty: 'Oliy ta’limdan keyingi ta’lim fakulteti' },
+  ru: { country: 'Республика Узбекистан', university: 'Университет общественной безопасности', faculty: 'Факультет послевузовского образования' },
+  en: { country: 'Republic of Uzbekistan', university: 'University of Public Safety', faculty: 'Faculty of Postgraduate Education' }
+}
+
+function BrandMark({ locale = 'uz', variant = 'sidebar', onClick, href = '#overview' }) {
+  const t = BRAND_TEXT[locale] || BRAND_TEXT.uz
+  return (
+    <a className={`brandmark brandmark-${variant}`} href={href} onClick={onClick} aria-label={`Ilm+ — ${t.university}`}>
+      <img src="./logo.jpg" alt="" className="brandmark-logo" />
+      <span className="brandmark-divider" aria-hidden="true" />
+      <span className="brandmark-text">
+        <strong>Ilm<em>+</em></strong>
+        <span className="brandmark-org">{t.university}</span>
+        <span className="brandmark-faculty">{t.faculty}</span>
+        <i className="brandmark-bar" aria-hidden="true" />
+      </span>
+    </a>
+  )
+}
+
+function ResearcherWorkspace({ user, normativeDocuments, expertiseCases, setExpertiseCases, onLogout, monitoringFiles, setMonitoringFiles, monitoringReports, setMonitoringReports, kengashFiles, setKengashFiles, postDefenseFiles, setPostDefenseFiles, theme, setTheme, locale, setLocale, isOnline, lastSyncTime, isSyncing, syncError, doFetchSync }) {
   const [tab, setTab] = useState('dashboard')
   const [seminarMenuOpen, setSeminarMenuOpen] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const seminarRef = useRef(null)
 
   const rejectedCount = (postDefenseFiles || []).filter(f => f.username === user.username && f.status === 'Rad etildi').length
+  const tr = (uz, ru, en) => (locale === 'ru' ? ru : locale === 'en' ? en : uz)
+
+  // Ochiq menyuni tashqariga bosilganda yoki Esc tugmasida yopish
+  useEffect(() => {
+    if (!seminarMenuOpen && !mobileMenuOpen) return
+    const onPointer = (event) => {
+      if (seminarRef.current && !seminarRef.current.contains(event.target)) setSeminarMenuOpen(false)
+    }
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        setSeminarMenuOpen(false)
+        setMobileMenuOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [seminarMenuOpen, mobileMenuOpen])
+
+  function go(nextTab) {
+    setTab(nextTab)
+    setSeminarMenuOpen(false)
+    setMobileMenuOpen(false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const navItems = [
+    { key: 'dashboard', icon: LayoutDashboard, label: tr('Mening kabinetim', 'Мой кабинет', 'My cabinet') },
+    { key: 'documents', icon: FileText, label: tr('Shaxsiy hujjatlar', 'Личные документы', 'Documents') },
+    { key: 'expertise', icon: ShieldCheck, label: tr('Ekspertiza arizasi', 'Экспертиза', 'Expertise') },
+    { key: 'seminar_group', icon: UsersRound, label: tr('Seminar / Kengash', 'Семинар / Совет', 'Seminar / Council') },
+    { key: 'post_defense', icon: FileCheck, label: tr('Himoyadan keyingi hujjatlar', 'После защиты', 'Post-defense'), alert: rejectedCount > 0 },
+    { key: 'nizom', icon: BookOpen, label: tr('Nizom va me’yorlar', 'Нормы', 'Regulations') },
+    { key: 'settings', icon: Settings2, label: tr('Sozlamalar', 'Настройки', 'Settings') }
+  ]
+  const seminarItems = [
+    { key: 'seminar', title: tr('Ilmiy seminarga', 'Научный семинар', 'Scientific seminar'), note: tr('Ilmiy seminar uchun ariza va hujjatlar', 'Заявка и документы на научный семинар', 'Application and documents for the seminar') },
+    { key: 'kengash', title: tr('Bir martalik kengashga', 'Разовый совет', 'One-time council'), note: tr('Bir martalik ilmiy kengash uchun hujjatlar', 'Документы для разового совета', 'Documents for the one-time council') }
+  ]
+  const seminarActive = tab === 'seminar' || tab === 'kengash'
+  const initials = String(user.researcherName || user.username || '?').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()
 
   return <main className="portal-shell">
-    <header className="portal-topbar">
-      <div style={{ display: 'flex', gap: '30px', alignItems: 'center' }}>
-        <a className="login-brand" href="#overview" onClick={(e) => { e.preventDefault(); setTab('dashboard'); }} style={{ margin: 0, textDecoration: 'none' }}>
-          <img src="./logo.jpg" alt="Logo" className="brand-logo" style={{ width: 34, height: 34 }} />
-          <span className="brand-name" style={{ fontSize: 11.5 }}>{locale === 'ru' ? 'Республика Узбекистан' : locale === 'en' ? 'Republic of Uzbekistan' : 'O‘zbekiston Respublikasi'}<br />{locale === 'ru' ? 'Университет общественной безопасности' : locale === 'en' ? 'University of Public Safety' : 'Jamoat xavfsizligi universiteti'}<br />{locale === 'ru' ? 'Факультет высшего образования' : locale === 'en' ? 'Faculty of Higher Education' : 'Oliy ta\'lim fakulteti'}</span>
-        </a>
-        <nav className="portal-nav" style={{ display: 'flex', gap: '15px', alignItems: 'center', overflowX: 'auto' }}>
-          <button className={`text-link ${tab === 'dashboard' ? 'active-tab' : ''}`} onClick={() => setTab('dashboard')}>{locale === 'ru' ? 'Мой кабинет' : locale === 'en' ? 'My Cabinet' : 'Mening kabinetim'}</button>
-          <button className={`text-link ${tab === 'documents' ? 'active-tab' : ''}`} onClick={() => setTab('documents')}>{locale === 'ru' ? 'Личные документы' : locale === 'en' ? 'Personal Documents' : 'Shaxsiy hujjatlar'}</button>
-          <button className={`text-link ${tab === 'expertise' ? 'active-tab' : ''}`} onClick={() => setTab('expertise')}>{locale === 'ru' ? 'Экспертиза' : locale === 'en' ? 'Expertise' : 'Ekspertiza arizasi'}</button>
-          
-          <div style={{ position: 'relative' }} onMouseLeave={() => setSeminarMenuOpen(false)}>
-            <button className={`text-link ${(tab === 'seminar' || tab === 'kengash') ? 'active-tab' : ''}`} onClick={() => setSeminarMenuOpen(!seminarMenuOpen)}>
-              {locale === 'ru' ? 'Научный семинар / совет' : locale === 'en' ? 'Scientific Seminar / Council' : 'Ilmiy seminarga / bir martalik kengashga'}
-            </button>
-            {seminarMenuOpen && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, background: '#1c211f', border: '1px solid #333', borderRadius: '4px', padding: '5px', display: 'flex', flexDirection: 'column', gap: '2px', zIndex: 100, minWidth: '180px', marginTop: '5px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}>
-                <button className={`text-link ${tab === 'seminar' ? 'active-tab' : ''}`} onClick={() => { setTab('seminar'); setSeminarMenuOpen(false); }} style={{ textAlign: 'left', padding: '6px 10px', fontSize: '13px' }}>{locale === 'ru' ? 'Научный семинар' : locale === 'en' ? 'Scientific Seminar' : 'Ilmiy seminarga'}</button>
-                <button className={`text-link ${tab === 'kengash' ? 'active-tab' : ''}`} onClick={() => { setTab('kengash'); setSeminarMenuOpen(false); }} style={{ textAlign: 'left', padding: '6px 10px', fontSize: '13px' }}>{locale === 'ru' ? 'Разовый совет' : locale === 'en' ? 'One-time Council' : 'Bir martalik kengashga'}</button>
-              </div>
-            )}
+    <header className="rp-header">
+      <div className="rp-header-inner">
+        <div className="rp-topline">
+          <BrandMark locale={locale} variant="portal" onClick={(e) => { e.preventDefault(); go('dashboard') }} />
+          <div className="rp-tools">
+            <SyncIndicator isOnline={isOnline} isSyncing={isSyncing} syncError={syncError} lastSyncTime={lastSyncTime} onSync={doFetchSync} compact />
+            <div className="locale-picker rp-locale" aria-label="Interfeys tili">{['uz', 'ru', 'en'].map((language) => <button key={language} className={locale === language ? 'locale-active' : ''} onClick={() => setLocale(language)}>{language.toUpperCase()}</button>)}</div>
+            <div className="rp-user" title={user.researcherName}>
+              <span className="rp-avatar">{initials}</span>
+              <span className="rp-user-text"><strong>{user.researcherName}</strong><small>{user.stage}-{tr('bosqich', 'этап', 'stage')} · {user.username}</small></span>
+            </div>
+            <button className="rp-logout" onClick={onLogout} title={tr('Chiqish', 'Выйти', 'Logout')} aria-label={tr('Chiqish', 'Выйти', 'Logout')}><LogOut size={17} /><span>{tr('Chiqish', 'Выйти', 'Logout')}</span></button>
           </div>
-          
-          <button className={`text-link ${tab === 'post_defense' ? 'active-tab' : ''}`} onClick={() => setTab('post_defense')}>
-            {locale === 'ru' ? 'После защиты' : locale === 'en' ? 'Post-defense' : 'Himoyadan keyingi hujjatlar'}
-            {rejectedCount > 0 && (
-              <span style={{ marginLeft: '5px', background: '#dc2626', color: '#fff', fontSize: '10px', padding: '1px 5px', borderRadius: '10px', fontWeight: 'bold' }}>!</span>
-            )}
-          </button>
+        </div>
 
-          <button className={`text-link ${tab === 'nizom' ? 'active-tab' : ''}`} onClick={() => setTab('nizom')}>{locale === 'ru' ? 'Нормы' : locale === 'en' ? 'Norms' : 'Nizom va Me’yorlar'}</button>
-          <button className={`text-link ${tab === 'settings' ? 'active-tab' : ''}`} onClick={() => setTab('settings')}>{locale === 'ru' ? 'Настройки' : locale === 'en' ? 'Settings' : 'Sozlamalar'}</button>
+        <nav className={`rp-navbar ${mobileMenuOpen ? 'rp-navbar-open' : ''}`} aria-label={tr('Asosiy menyu', 'Главное меню', 'Main menu')}>
+          <button className="rp-burger" aria-label={tr('Menyuni ochish', 'Открыть меню', 'Open menu')} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>
+            {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+            <span>{navItems.find((item) => item.key === tab)?.label || seminarItems.find((item) => item.key === tab)?.title}</span>
+          </button>
+          <div className="rp-nav-items">
+            {navItems.map(({ key, icon: Icon, label, alert: hasAlert }) => key === 'seminar_group' ? (
+              <div key={key} className="rp-dropdown" ref={seminarRef}>
+                <button className={`rp-nav-item ${seminarActive ? 'active' : ''}`} aria-haspopup="true" aria-expanded={seminarMenuOpen} onClick={() => setSeminarMenuOpen((open) => !open)}>
+                  <Icon size={16} /><span>{label}</span><ChevronDown size={15} className={`rp-chevron ${seminarMenuOpen ? 'open' : ''}`} />
+                </button>
+                {seminarMenuOpen && (
+                  <div className="rp-dropdown-panel" role="menu">
+                    {seminarItems.map((item) => (
+                      <button key={item.key} role="menuitem" className={`rp-dropdown-item ${tab === item.key ? 'active' : ''}`} onClick={() => go(item.key)}>
+                        <span className="rp-dropdown-icon"><UsersRound size={17} /></span>
+                        <span><strong>{item.title}</strong><small>{item.note}</small></span>
+                        <ChevronRight size={15} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button key={key} className={`rp-nav-item ${tab === key ? 'active' : ''}`} onClick={() => go(key)}>
+                <Icon size={16} /><span>{label}</span>{hasAlert && <i className="rp-nav-alert" title={tr('Qaytarilgan hujjat bor', 'Есть возвращённые документы', 'Returned documents')}>!</i>}
+              </button>
+            ))}
+          </div>
         </nav>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-        <div className="live-sync-indicator" title={isOnline ? `Serverga ulangan. So'nggi sinxron: ${lastSyncTime || 'Biroz oldin'}` : "Internet yoki serverga ulanmagan"} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', borderRadius: 16, background: isOnline ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)', border: `1px solid ${isOnline ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`, fontSize: 11, color: isOnline ? '#22c55e' : '#ef4444' }}>
-          <span style={{ width: 7, height: 7, borderRadius: '50%', background: isOnline ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
-          <span style={{ fontWeight: 600 }}>{isOnline ? (isSyncing ? 'Sinxronlanmoqda...' : 'Real-vaqt faol') : 'Oflayn'}</span>
-          <button className={`icon-button ${isSyncing ? 'spin' : ''}`} style={{ padding: 0, height: 'auto', width: 'auto', border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer' }} onClick={doFetchSync} title="Hozir sinxronlash">
-            <RefreshCw size={11} />
-          </button>
-        </div>
-        <div className="locale-picker" aria-label="Interfeys tili">{['uz', 'ru', 'en'].map((language) => <button key={language} className={locale === language ? 'locale-active' : ''} onClick={() => setLocale(language)}>{language.toUpperCase()}</button>)}</div>
-        <button className="secondary-button" onClick={onLogout}>{locale === 'ru' ? 'Выйти' : locale === 'en' ? 'Logout' : 'Chiqish'}</button>
-      </div>
     </header>
-    
+    {mobileMenuOpen && <button className="rp-scrim" aria-label={tr('Menyuni yopish', 'Закрыть меню', 'Close menu')} onClick={() => setMobileMenuOpen(false)} />}
+
     {tab === 'dashboard' && <ResearcherDashboard user={user} normativeDocuments={normativeDocuments} locale={locale} />}
     {tab === 'documents' && <ResearcherDocumentsApp user={user} files={monitoringFiles} setFiles={setMonitoringFiles} reports={monitoringReports} setReports={setMonitoringReports} locale={locale} />}
     {tab === 'expertise' && <ResearcherExpertiseApp user={user} expertiseCases={expertiseCases} setExpertiseCases={setExpertiseCases} locale={locale} />}
@@ -1572,23 +1690,11 @@ function ResearcherWorkspace({ user, normativeDocuments, expertiseCases, setExpe
     {tab === 'kengash' && <div className="portal-content"><KengashStudentView user={user} kengashFiles={kengashFiles} setKengashFiles={setKengashFiles} locale={locale} /></div>}
     {tab === 'post_defense' && <div className="portal-content"><PostDefenseStudentView user={user} postDefenseFiles={postDefenseFiles} setPostDefenseFiles={setPostDefenseFiles} locale={locale} /></div>}
     {tab === 'nizom' && <div className="portal-content"><NizomView onNavigateExpertise={() => setTab('expertise')} locale={locale} /></div>}
-    {tab === 'settings' && <ResearcherSettings user={user} theme={theme} setTheme={setTheme} accounts={accounts} setAccounts={setAccounts} updateAuthUser={updateAuthUser} locale={locale} />}
+    {tab === 'settings' && <ResearcherSettings theme={theme} setTheme={setTheme} locale={locale} />}
   </main>
 }
 
-function ResearcherSettings({ user, theme, setTheme, accounts, setAccounts, updateAuthUser, locale }) {
-  const [newPassword, setNewPassword] = useState(user.password || '')
-  const [saveMessage, setSaveMessage] = useState('')
-
-  const handleSave = (e) => {
-    e.preventDefault()
-    const updatedAccounts = accounts.map(acc => acc.username === user.username ? { ...acc, password: newPassword } : acc)
-    setAccounts(updatedAccounts)
-    updateAuthUser({ ...user, password: newPassword })
-    setSaveMessage('Parol muvaffaqiyatli saqlandi!')
-    setTimeout(() => setSaveMessage(''), 3000)
-  }
-
+function ResearcherSettings({ theme, setTheme, locale }) {
   return (
     <div className="portal-content">
       <section className="portal-documents panel">
@@ -1598,9 +1704,9 @@ function ResearcherSettings({ user, theme, setTheme, accounts, setAccounts, upda
             <h2>{locale === 'ru' ? 'Настройки соискателя' : locale === 'en' ? 'Researcher settings' : 'Tadqiqotchi sozlamalari'}</h2>
           </div>
         </div>
-        
+
         <div style={{ padding: '0 20px 20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <div className="setting-group" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #dce5e0', paddingBottom: 15 }}>
+          <div className="setting-group" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #dce5e0', paddingBottom: 15, gap: 12, flexWrap: 'wrap' }}>
             <div>
               <strong style={{ display: 'block', marginBottom: 5 }}>{locale === 'ru' ? 'Тема системы' : locale === 'en' ? 'System Theme' : 'Tizim ko\'rinishi'}</strong>
               <small style={{ color: '#8b978e' }}>{locale === 'ru' ? 'Выберите светлый или темный режим' : locale === 'en' ? 'Select light or dark mode' : 'Kunduzgi yoki kechki rejimni tanlang'}</small>
@@ -1611,20 +1717,94 @@ function ResearcherSettings({ user, theme, setTheme, accounts, setAccounts, upda
             </div>
           </div>
 
-          <form className="setting-group" onSubmit={handleSave}>
+          <div className="setting-group">
             <div>
               <strong style={{ display: 'block', marginBottom: 5 }}>{locale === 'ru' ? 'Пароль для входа' : locale === 'en' ? 'Login Password' : 'Kirish paroli'}</strong>
               <small style={{ color: '#8b978e' }}>{locale === 'ru' ? 'Обновите пароль для входа в систему' : locale === 'en' ? 'Update your password to log in' : 'Tizimga kirish uchun parolingizni yangilang'}</small>
             </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 10, alignItems: 'center' }}>
-              <input type="text" value={newPassword} onChange={e => setNewPassword(e.target.value)} style={{ height: 36, padding: '0 10px', borderRadius: 4, border: '1px solid #dce5e0', flex: 1, maxWidth: 300 }} required />
-              <button type="submit" className="primary-button">{locale === 'ru' ? 'Сохранить' : locale === 'en' ? 'Save' : 'Saqlash'}</button>
-            </div>
-            {saveMessage && <p style={{ color: '#58a071', fontSize: 12, marginTop: 10 }}><Check size={14} style={{ verticalAlign: 'middle' }} /> {saveMessage}</p>}
-          </form>
+            <PasswordChangeForm locale={locale} />
+          </div>
         </div>
       </section>
     </div>
+  )
+}
+
+function PasswordChangeForm({ locale }) {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [message, setMessage] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    if (newPassword.length < 6) {
+      setMessage({ ok: false, text: 'Yangi parol kamida 6 ta belgidan iborat bo‘lishi kerak.' })
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setMessage({ ok: false, text: 'Yangi parol va uning takrori mos kelmadi.' })
+      return
+    }
+    setBusy(true)
+    try {
+      await changePassword(currentPassword, newPassword)
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      setMessage({ ok: true, text: 'Parol muvaffaqiyatli saqlandi!' })
+    } catch (error) {
+      setMessage({ ok: false, text: error.message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const inputStyle = { height: 36, padding: '0 10px', borderRadius: 4, border: '1px solid #dce5e0', width: '100%', maxWidth: 300 }
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 8, marginTop: 10, maxWidth: 320 }}>
+      <input type="password" autoComplete="current-password" placeholder={locale === 'ru' ? 'Текущий пароль' : locale === 'en' ? 'Current password' : 'Joriy parol'} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} style={inputStyle} required />
+      <input type="password" autoComplete="new-password" placeholder={locale === 'ru' ? 'Новый пароль' : locale === 'en' ? 'New password' : 'Yangi parol'} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} required minLength={6} />
+      <input type="password" autoComplete="new-password" placeholder={locale === 'ru' ? 'Повторите новый пароль' : locale === 'en' ? 'Repeat new password' : 'Yangi parolni takrorlang'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} style={inputStyle} required minLength={6} />
+      <button type="submit" className="primary-button" disabled={busy} style={{ justifySelf: 'start' }}>{busy ? '...' : locale === 'ru' ? 'Сохранить' : locale === 'en' ? 'Save' : 'Saqlash'}</button>
+      {message && <p style={{ color: message.ok ? '#58a071' : '#da1e28', fontSize: 12, margin: 0 }}>{message.ok ? <Check size={14} style={{ verticalAlign: 'middle' }} /> : <CircleAlert size={14} style={{ verticalAlign: 'middle' }} />} {message.text}</p>}
+    </form>
+  )
+}
+
+function SyncIndicator({ isOnline, isSyncing, syncError, lastSyncTime, onSync, compact = false }) {
+  const healthy = isOnline && !syncError
+  const color = healthy ? '#16a34a' : isOnline ? '#d97706' : '#dc2626'
+  const label = !isOnline ? 'Oflayn' : isSyncing ? 'Sinxronlanmoqda...' : syncError ? 'Saqlanmadi' : 'Real-vaqt faol'
+  const title = !isOnline
+    ? 'Serverga ulanmagan. O‘zgarishlar ulanish tiklangach yuboriladi.'
+    : syncError || `Serverga ulangan. So‘nggi sinxron: ${lastSyncTime || 'biroz oldin'}`
+  return (
+    <div className="live-sync-indicator" title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: compact ? '3px 8px' : '4px 10px', borderRadius: 20, background: `${color}1f`, border: `1px solid ${color}4d`, fontSize: compact ? 11 : 12, color }}>
+      <span style={{ width: compact ? 7 : 8, height: compact ? 7 : 8, borderRadius: '50%', background: color, display: 'inline-block' }} />
+      <span style={{ fontWeight: 600 }}>{label}</span>
+      <button className={`icon-button ${isSyncing ? 'spin' : ''}`} style={{ padding: compact ? 0 : 2, height: 'auto', width: 'auto', border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer' }} onClick={onSync} title="Hozir sinxronlash" aria-label="Hozir sinxronlash">
+        <RefreshCw size={compact ? 11 : 12} />
+      </button>
+    </div>
+  )
+}
+
+function LoadingScreen({ text, onRetry, onLogout }) {
+  return (
+    <main className="login-screen">
+      <section className="login-panel" style={{ textAlign: 'center', gap: 16 }}>
+        <img src="./logo.jpg" alt="Logo" className="brand-logo" style={{ margin: '0 auto' }} />
+        <p>{text}</p>
+        {(onRetry || onLogout) && (
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+            {onRetry && <button className="primary-button" onClick={onRetry}><RefreshCw size={15} /> Qayta urinish</button>}
+            {onLogout && <button className="secondary-button" onClick={onLogout}><LogOut size={15} /> Chiqish</button>}
+          </div>
+        )}
+      </section>
+    </main>
   )
 }
 
@@ -1634,12 +1814,13 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
   
   const [docName, setDocName] = useState('')
   const [docType, setDocType] = useState('Maqola')
-  const [docYear, setDocYear] = useState('2026')
+  const yearOptions = [0, 1, 2, 3].map((offset) => String(new Date().getFullYear() - 2 + offset))
+  const [docYear, setDocYear] = useState(() => String(new Date().getFullYear()))
   const [docQuarter, setDocQuarter] = useState('1')
   const [selectedFiles, setSelectedFiles] = useState([])
   
   const [reportStage, setReportStage] = useState(String(user.stage || 1))
-  const [reportYear, setReportYear] = useState('2026')
+  const [reportYear, setReportYear] = useState(() => String(new Date().getFullYear()))
 
   const userFiles = files.filter(f => f.username === user.username)
   const userReports = reports.filter(r => r.username === user.username)
@@ -1659,8 +1840,7 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
       validFiles.push({
         rawFile: file,
         name: file.name,
-        size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-        url: URL.createObjectURL(file)
+        size: (file.size / 1024 / 1024).toFixed(2) + ' MB'
       })
     }
     setSelectedFiles(validFiles)
@@ -1688,7 +1868,7 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
       const fileName = uploadedFilesMeta.length === 1 ? uploadedFilesMeta[0].name : (uploadedFilesMeta.length > 1 ? `${uploadedFilesMeta.length} ta fayl` : 'Hujjat_fayli')
       const totalSize = uploadedFilesMeta.length > 0 ? uploadedFilesMeta.reduce((acc, f) => acc + parseFloat(f.size || 0), 0).toFixed(2) + ' MB' : '0 MB'
       const newFile = {
-        id: `doc-${Date.now()}`,
+        id: uid('doc'),
         username: user.username,
         name: docName || fileName,
         fileName: fileName,
@@ -1697,7 +1877,7 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
         size: totalSize,
         files: uploadedFilesMeta
       }
-      setFiles([newFile, ...files])
+      setFiles((items) => [newFile, ...items])
       setModalOpen(false)
       setDocName('')
       setSelectedFiles([])
@@ -1711,7 +1891,7 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
   function createReport(e) {
     e.preventDefault()
     const newReport = {
-      id: `rep-${Date.now()}`,
+      id: uid('rep'),
       username: user.username,
       fio: user.researcherName || user.name,
       org: 'Jamoat xavfsizligi universiteti',
@@ -1719,15 +1899,17 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
       quarter: `${reportYear}/1`,
       status: 'Kutilmoqda'
     }
-    setReports([newReport, ...reports])
+    setReports((items) => [newReport, ...items])
     setModalOpen(false)
   }
-  
+
   function deleteFile(id) {
-    setFiles(files.filter(f => f.id !== id))
+    if (!window.confirm('Ushbu hujjatni o‘chirishni tasdiqlaysizmi?')) return
+    setFiles((items) => items.filter(f => f.id !== id))
   }
   function deleteReport(id) {
-    setReports(reports.filter(r => r.id !== id))
+    if (!window.confirm('Ushbu hisobotni o‘chirishni tasdiqlaysizmi?')) return
+    setReports((items) => items.filter(r => r.id !== id))
   }
 
   return (
@@ -1814,8 +1996,8 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
                     <td>{r.org}</td>
                     <td>{r.stage}</td>
                     <td>{r.quarter}</td>
-                    <td><span className="status-pill status-needsReview" style={{ backgroundColor: '#ff9800', color: '#fff' }}>{r.status}</span></td>
-                    <td><button className="icon-button" onClick={() => deleteReport(r.id)}><Trash2 size={14} /></button></td>
+                    <td><span className={`status-pill ${r.status === 'Qabul qilindi' ? 'status-inProgress' : r.status === 'Rad etildi' ? 'status-atRisk' : 'status-needsReview'}`} style={r.status === 'Kutilmoqda' ? { backgroundColor: '#ff9800', color: '#fff' } : r.status === 'Rad etildi' ? { backgroundColor: '#da1e28', color: '#fff' } : {}}>{r.status}</span></td>
+                    <td>{r.status === 'Kutilmoqda' ? <button className="icon-button" aria-label="Hisobotni o‘chirish" onClick={() => deleteReport(r.id)}><Trash2 size={14} /></button> : <span style={{ fontSize: 11, color: '#8b978e' }}>—</span>}</td>
                   </tr>
                 ))}
                 {userReports.length === 0 && <tr><td colSpan="7" style={{ textAlign: 'center', padding: 20, color: '#8b978e' }}>Hech qanday mos yozuv topilmadi</td></tr>}
@@ -1851,7 +2033,7 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
                   <label className="input-group" style={{ flex: 1 }}>
                     <span>Hisobot davri</span>
                     <select value={docYear} onChange={e => setDocYear(e.target.value)}>
-                      <option>2024</option><option>2025</option><option>2026</option>
+                      {yearOptions.map((year) => <option key={year}>{year}</option>)}
                     </select>
                   </label>
                   <label className="input-group" style={{ flex: 1 }}>
@@ -1871,8 +2053,8 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
                   </div>
                 </label>
                 <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-                  <button type="submit" className="primary-button">{locale === 'ru' ? 'Создать' : locale === 'en' ? 'Create' : 'Yaratish'}</button>
-                  <button type="button" className="secondary-button" onClick={() => setModalOpen(false)}>{locale === 'ru' ? 'Отмена' : locale === 'en' ? 'Cancel' : 'Bekor qilish'}</button>
+                  <button type="submit" className="primary-button" disabled={isSubmittingDoc}>{isSubmittingDoc ? 'Yuklanmoqda...' : locale === 'ru' ? 'Создать' : locale === 'en' ? 'Create' : 'Yaratish'}</button>
+                  <button type="button" className="secondary-button" disabled={isSubmittingDoc} onClick={() => setModalOpen(false)}>{locale === 'ru' ? 'Отмена' : locale === 'en' ? 'Cancel' : 'Bekor qilish'}</button>
                 </div>
               </form>
             ) : (
@@ -1889,7 +2071,7 @@ function ResearcherDocumentsApp({ user, files, setFiles, reports, setReports, lo
                 <label className="input-group">
                   <span>Yil</span>
                   <select value={reportYear} onChange={e => setReportYear(e.target.value)}>
-                    <option value="2024">2024</option><option value="2025">2025</option><option value="2026">2026</option>
+                    {yearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
                   </select>
                 </label>
                 <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
@@ -1972,13 +2154,14 @@ function ResearcherDashboard({ user, normativeDocuments }) {
 }
 
 function ResearcherExpertiseApp({ user, expertiseCases, setExpertiseCases }) {
-  const existingCase = expertiseCases.find(c => c.researcherName === (user.researcherName || user.name))
+  const existingCase = expertiseCases.find(c => c.username === user.username) || expertiseCases.find(c => !c.username && c.researcherName === (user.researcherName || user.name))
   const [topic, setTopic] = useState('')
   
   function submitApp(e) {
     e.preventDefault()
     const newCase = {
-      id: `exp-${Date.now()}`,
+      id: uid('exp'),
+      username: user.username,
       researcherName: user.researcherName || user.name,
       degree: 'PhD',
       field: user.field || 'Noma\'lum',
@@ -1995,7 +2178,7 @@ function ResearcherExpertiseApp({ user, expertiseCases, setExpertiseCases }) {
       isKengashAppointed: false,
       hasDirectDefense: false,
     }
-    setExpertiseCases([newCase, ...expertiseCases])
+    setExpertiseCases((items) => [newCase, ...items])
   }
 
   const fileInputRef = useRef(null)
@@ -2025,38 +2208,32 @@ function ResearcherExpertiseApp({ user, expertiseCases, setExpertiseCases }) {
         return
       }
       try {
-        const up = await uploadRealFile(file, `Ekspertiza - ${activeUploadKey}`, { username: user.username })
+        const up = await uploadRealFile(file, `Ekspertiza - ${activeUploadKey}`)
         validFiles.push({
           name: file.name,
           size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-          fileUrl: up.fileUrl,
-          url: up.fileUrl
+          fileUrl: up.fileUrl
         })
       } catch (err) {
-        console.error('File upload error:', err)
-        validFiles.push({
-          name: file.name,
-          size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-          url: URL.createObjectURL(file)
-        })
+        setUploadError(`${file.name}: ${err.message}`)
       }
     }
 
-    const newCases = expertiseCases.map(c => {
-      if (c.id === existingCase.id) {
+    const uploadKey = activeUploadKey
+    if (validFiles.length) {
+      setExpertiseCases((items) => items.map(c => {
+        if (c.id !== existingCase.id) return c
+        const previous = Array.isArray(c.documentsStatus?.[uploadKey]) ? c.documentsStatus[uploadKey] : []
         return {
           ...c,
           documentsStatus: {
             ...c.documentsStatus,
-            [activeUploadKey]: [...currentFiles, ...validFiles]
+            [uploadKey]: [...previous, ...validFiles]
           }
         }
-      }
-      return c
-    })
-    setExpertiseCases(newCases)
+      }))
+    }
     setIsUploading(false)
-    setUploadError('')
     setActiveUploadKey(null)
     event.target.value = ''
   }

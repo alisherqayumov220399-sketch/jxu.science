@@ -1,0 +1,27 @@
+# Render.com Blueprint: New + → Blueprint → ushbu repozitoriyni tanlang.
+# Diqqat: ma'lumotlar saqlanib qolishi uchun doimiy disk (persistent disk) kerak.
+# Disk faqat pullik tariflarda mavjud; bepul tarifda har qayta ishga tushirishda
+# baza va yuklangan fayllar o'chib ketadi.
+services:
+  - type: web
+    name: ilm-monitoring
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: DATA_DIR
+        value: /var/data
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+    disk:
+      name: ilm-data
+      mountPath: /var/data
+      sizeGB: 1
