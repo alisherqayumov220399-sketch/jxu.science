@@ -18,7 +18,7 @@ services:
       - key: SESSION_SECRET
         generateValue: true
       - key: ADMIN_USERNAME
-        value: admin
+        value: OTKTF
       - key: ADMIN_PASSWORD
         sync: false
     disk:

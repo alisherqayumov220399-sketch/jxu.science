@@ -12,8 +12,11 @@ Vercel) **yetarli emas** — u yerda server, baza va fayl ombori ishlamaydi.
 1. [Node.js](https://nodejs.org) (LTS, 20+) o'rnating.
 2. Windows: `saytni-ochish.bat` faylini ikki marta bosing.
    Boshqa tizimlar: `npm install`, `npm run build`, `npm start`.
-3. Konsolda chiqqan **admin login va parolni** yozib oling
-   (nusxasi: `backend/data/ADMIN_PAROL.txt`).
+3. Admin login: **`OTKTF`**. Parolni o'zingiz belgilash uchun serverni
+   to'xtatib bir marta bajaring (Windows `cmd`):
+   `set ADMIN_PASSWORD=<parolingiz>` va `npm run reset-admin`.
+   Aks holda birinchi ishga tushirishda tasodifiy parol konsolga va
+   `backend/data/ADMIN_PAROL.txt` fayliga yoziladi.
 4. Brauzerda `http://localhost:5000` ni oching.
 
 Institut tarmog'idagi boshqa kompyuterlardan kirish uchun server kompyuterining
@@ -28,8 +31,8 @@ IP manzilidan foydalaning, masalan `http://192.168.1.45:5000`
    (yopiq) qiling.
 2. [Render.com](https://render.com) → **New + → Blueprint** → repozitoriyni
    tanlang. `render.yaml` fayli barcha sozlamalarni o'zi qo'yadi.
-3. `ADMIN_PASSWORD` qiymatini kiriting (yoki bo'sh qoldiring — parol
-   xizmat jurnalida (Logs) chiqadi).
+3. Environment bo'limida `ADMIN_PASSWORD` ga o'z parolingizni kiriting
+   (login standart holatda `OTKTF`).
 4. Deploy tugagach berilgan manzil (masalan `https://ilm-monitoring.onrender.com`)
    orqali tizimga kiring.
 
@@ -71,7 +74,8 @@ Serverni to'xtating va bajaring:
 npm run reset-admin
 ```
 
-Yangi parol konsolga va `ADMIN_PAROL.txt` fayliga yoziladi.
+`ADMIN_PASSWORD` berilgan bo'lsa o'sha parol, aks holda yangi tasodifiy parol
+o'rnatiladi (konsolga va `ADMIN_PAROL.txt` fayliga yoziladi).
 
 ---
 

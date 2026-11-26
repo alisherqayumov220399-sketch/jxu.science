@@ -28,10 +28,11 @@ npm start
 So'ng brauzerda `http://localhost:5000` manzilini oching. Windows'da buning
 o'rniga `saytni-ochish.bat` faylini ikki marta bosish kifoya.
 
-**Birinchi ishga tushirishda** server administrator hisobini yaratadi va login
-hamda parolni konsolga chiqaradi (nusxasi: `backend/data/ADMIN_PAROL.txt`).
-Kirgach, **Sozlamalar → Administrator paroli** bo'limida parolni o'zgartiring va
-`ADMIN_PAROL.txt` faylini o'chiring.
+**Administrator hisobi:** login `OTKTF`. Parol xavfsizlik uchun kodda
+saqlanmaydi — uni `ADMIN_PASSWORD` muhit o'zgaruvchisi orqali bering (pastdagi
+jadvalga qarang). Berilmasa, birinchi ishga tushirishda tasodifiy parol yaratilib
+konsolga va `backend/data/ADMIN_PAROL.txt` fayliga yoziladi. Parolni keyinroq
+**Sozlamalar → Administrator paroli** bo'limida o'zgartirish mumkin.
 
 ## Sozlamalar (muhit o'zgaruvchilari)
 
@@ -39,7 +40,7 @@ Kirgach, **Sozlamalar → Administrator paroli** bo'limida parolni o'zgartiring 
 |---|---|---|
 | `PORT` | Server porti | `5000` |
 | `DATA_DIR` | Baza va yuklangan fayllar papkasi (hostingda doimiy diskka yo'naltiring) | `backend/data` va `backend/uploads` |
-| `ADMIN_USERNAME` | Birinchi ishga tushirishda yaratiladigan admin logini | `admin` |
+| `ADMIN_USERNAME` | Birinchi ishga tushirishda yaratiladigan admin logini | `OTKTF` |
 | `ADMIN_PASSWORD` | Admin paroli (berilmasa tasodifiy yaratiladi) | — |
 | `SESSION_SECRET` | Tokenlarni imzolash kaliti (berilmasa avtomatik yaratilib, `DATA_DIR` da saqlanadi) | — |
 | `CORS_ORIGIN` | Frontend boshqa domenda bo'lsa, ruxsat etilgan manzil(lar) | — |
@@ -52,7 +53,7 @@ Kirgach, **Sozlamalar → Administrator paroli** bo'limida parolni o'zgartiring 
 | `npm run lint` | Kod tekshiruvi (oxlint) |
 | `npm test` | Backend API testlari |
 | `npm run check` | Lint + test + build |
-| `npm run reset-admin` | Admin parolini tiklash (serverni to'xtatib bajaring) |
+| `npm run reset-admin` | Admin parolini qayta o'rnatish: `ADMIN_PASSWORD` dan yoki tasodifiy (serverni to'xtatib bajaring) |
 
 ## Xavfsizlik
 
