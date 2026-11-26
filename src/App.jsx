@@ -907,8 +907,8 @@ function App() {
 
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNavOpen ? 'sidebar-open' : ''}`}>
-      <a className="brand" href="#overview" onClick={() => setPage('overview')}><img src="./logo.jpg" alt="Logo" className="brand-logo" /><span className="brand-name">{locale === 'ru' ? 'Республика Узбекистан' : locale === 'en' ? 'Republic of Uzbekistan' : 'O‘zbekiston Respublikasi'}<br />{locale === 'ru' ? 'Университет общественной безопасности' : locale === 'en' ? 'University of Public Safety' : 'Jamoat xavfsizligi universiteti'}<br />{locale === 'ru' ? 'Факультет послевузовского образования' : locale === 'en' ? 'Faculty of Postgraduate Education' : 'Oliy ta\'limdan keyingi ta\'lim fakulteti'}</span></a>
-      <div className="workspace-label" style={{ fontSize: '20px', fontWeight: '900', color: '#fff' }}>{locale === 'ru' ? 'НАУЧНАЯ ДЕЯТЕЛЬНОСТЬ' : locale === 'en' ? 'RESEARCH ACTIVITY' : 'ILMIY FAOLIYAT'}</div>
+      <BrandMark locale={locale} variant="sidebar" onClick={() => { setPage('overview'); setMobileNavOpen(false) }} />
+      <div className="workspace-label">{locale === 'ru' ? 'Научная деятельность' : locale === 'en' ? 'Research activity' : 'Ilmiy faoliyat'}</div>
 
       <nav className="side-nav" aria-label="Asosiy navigatsiya">
         {navItemsBefore.map(({ key, title, icon: Icon, badge }) => <button key={key} type="button" className={`nav-item ${page === key ? 'nav-active' : ''}`} onClick={() => { setPage(key); setMobileNavOpen(false) }}><Icon size={18} /><span>{title}</span>{badge ? <i className="nav-count">{badge}</i> : null}</button>)}
@@ -1538,7 +1538,7 @@ function UnifiedLogin({ onLogin, error, locale }) {
     <video autoPlay loop muted playsInline preload="metadata" poster="./logo.jpg" className="login-bg-video"><source src="./video.mp4" type="video/mp4" /></video>
     <div className="login-overlay"></div>
     <section className="login-panel">
-      <a className="login-brand" href="#overview"><img src="./logo.jpg" alt="Logo" className="brand-logo" /><span className="brand-name">{locale === 'ru' ? 'Республика Узбекистан' : locale === 'en' ? 'Republic of Uzbekistan' : 'O‘zbekiston Respublikasi'}<br />{locale === 'ru' ? 'Университет общественной безопасности' : locale === 'en' ? 'University of Public Safety' : 'Jamoat xavfsizligi universiteti'}<br />{locale === 'ru' ? 'Факультет послевузовского образования' : locale === 'en' ? 'Faculty of Postgraduate Education' : 'Oliy ta\'limdan keyingi ta\'lim fakulteti'}</span></a>
+      <BrandMark locale={locale} variant="login" onClick={(e) => e.preventDefault()} />
       <span className="section-kicker">{locale === 'ru' ? 'ВХОД В СИСТЕМУ' : locale === 'en' ? 'SYSTEM LOGIN' : 'TIZIMGA KIRISH'}</span>
       <h1>{locale === 'ru' ? 'Добро пожаловать' : locale === 'en' ? 'Welcome' : 'Xush kelibsiz'}</h1>
       
@@ -1559,54 +1559,130 @@ function UnifiedLogin({ onLogin, error, locale }) {
   </main>
 }
 
+const BRAND_TEXT = {
+  uz: { country: 'O‘zbekiston Respublikasi', university: 'Jamoat xavfsizligi universiteti', faculty: 'Oliy ta’limdan keyingi ta’lim fakulteti' },
+  ru: { country: 'Республика Узбекистан', university: 'Университет общественной безопасности', faculty: 'Факультет послевузовского образования' },
+  en: { country: 'Republic of Uzbekistan', university: 'University of Public Safety', faculty: 'Faculty of Postgraduate Education' }
+}
+
+function BrandMark({ locale = 'uz', variant = 'sidebar', onClick, href = '#overview' }) {
+  const t = BRAND_TEXT[locale] || BRAND_TEXT.uz
+  return (
+    <a className={`brandmark brandmark-${variant}`} href={href} onClick={onClick} aria-label={`Ilm+ — ${t.university}`}>
+      <img src="./logo.jpg" alt="" className="brandmark-logo" />
+      <span className="brandmark-divider" aria-hidden="true" />
+      <span className="brandmark-text">
+        <strong>Ilm<em>+</em></strong>
+        <span className="brandmark-org">{t.university}</span>
+        <span className="brandmark-faculty">{t.faculty}</span>
+        <i className="brandmark-bar" aria-hidden="true" />
+      </span>
+    </a>
+  )
+}
+
 function ResearcherWorkspace({ user, normativeDocuments, expertiseCases, setExpertiseCases, onLogout, monitoringFiles, setMonitoringFiles, monitoringReports, setMonitoringReports, kengashFiles, setKengashFiles, postDefenseFiles, setPostDefenseFiles, theme, setTheme, locale, setLocale, isOnline, lastSyncTime, isSyncing, syncError, doFetchSync }) {
   const [tab, setTab] = useState('dashboard')
   const [seminarMenuOpen, setSeminarMenuOpen] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const seminarRef = useRef(null)
 
   const rejectedCount = (postDefenseFiles || []).filter(f => f.username === user.username && f.status === 'Rad etildi').length
+  const tr = (uz, ru, en) => (locale === 'ru' ? ru : locale === 'en' ? en : uz)
+
+  // Ochiq menyuni tashqariga bosilganda yoki Esc tugmasida yopish
+  useEffect(() => {
+    if (!seminarMenuOpen && !mobileMenuOpen) return
+    const onPointer = (event) => {
+      if (seminarRef.current && !seminarRef.current.contains(event.target)) setSeminarMenuOpen(false)
+    }
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        setSeminarMenuOpen(false)
+        setMobileMenuOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [seminarMenuOpen, mobileMenuOpen])
+
+  function go(nextTab) {
+    setTab(nextTab)
+    setSeminarMenuOpen(false)
+    setMobileMenuOpen(false)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const navItems = [
+    { key: 'dashboard', icon: LayoutDashboard, label: tr('Mening kabinetim', 'Мой кабинет', 'My cabinet') },
+    { key: 'documents', icon: FileText, label: tr('Shaxsiy hujjatlar', 'Личные документы', 'Documents') },
+    { key: 'expertise', icon: ShieldCheck, label: tr('Ekspertiza arizasi', 'Экспертиза', 'Expertise') },
+    { key: 'seminar_group', icon: UsersRound, label: tr('Seminar / Kengash', 'Семинар / Совет', 'Seminar / Council') },
+    { key: 'post_defense', icon: FileCheck, label: tr('Himoyadan keyingi hujjatlar', 'После защиты', 'Post-defense'), alert: rejectedCount > 0 },
+    { key: 'nizom', icon: BookOpen, label: tr('Nizom va me’yorlar', 'Нормы', 'Regulations') },
+    { key: 'settings', icon: Settings2, label: tr('Sozlamalar', 'Настройки', 'Settings') }
+  ]
+  const seminarItems = [
+    { key: 'seminar', title: tr('Ilmiy seminarga', 'Научный семинар', 'Scientific seminar'), note: tr('Ilmiy seminar uchun ariza va hujjatlar', 'Заявка и документы на научный семинар', 'Application and documents for the seminar') },
+    { key: 'kengash', title: tr('Bir martalik kengashga', 'Разовый совет', 'One-time council'), note: tr('Bir martalik ilmiy kengash uchun hujjatlar', 'Документы для разового совета', 'Documents for the one-time council') }
+  ]
+  const seminarActive = tab === 'seminar' || tab === 'kengash'
+  const initials = String(user.researcherName || user.username || '?').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()
 
   return <main className="portal-shell">
-    <header className="portal-topbar">
-      <div style={{ display: 'flex', gap: '30px', alignItems: 'center' }}>
-        <a className="login-brand" href="#overview" onClick={(e) => { e.preventDefault(); setTab('dashboard'); }} style={{ margin: 0, textDecoration: 'none' }}>
-          <img src="./logo.jpg" alt="Logo" className="brand-logo" style={{ width: 34, height: 34 }} />
-          <span className="brand-name" style={{ fontSize: 11.5 }}>{locale === 'ru' ? 'Республика Узбекистан' : locale === 'en' ? 'Republic of Uzbekistan' : 'O‘zbekiston Respublikasi'}<br />{locale === 'ru' ? 'Университет общественной безопасности' : locale === 'en' ? 'University of Public Safety' : 'Jamoat xavfsizligi universiteti'}<br />{locale === 'ru' ? 'Факультет высшего образования' : locale === 'en' ? 'Faculty of Higher Education' : 'Oliy ta\'lim fakulteti'}</span>
-        </a>
-        <nav className="portal-nav" style={{ display: 'flex', gap: '15px', alignItems: 'center', overflowX: 'auto' }}>
-          <button className={`text-link ${tab === 'dashboard' ? 'active-tab' : ''}`} onClick={() => setTab('dashboard')}>{locale === 'ru' ? 'Мой кабинет' : locale === 'en' ? 'My Cabinet' : 'Mening kabinetim'}</button>
-          <button className={`text-link ${tab === 'documents' ? 'active-tab' : ''}`} onClick={() => setTab('documents')}>{locale === 'ru' ? 'Личные документы' : locale === 'en' ? 'Personal Documents' : 'Shaxsiy hujjatlar'}</button>
-          <button className={`text-link ${tab === 'expertise' ? 'active-tab' : ''}`} onClick={() => setTab('expertise')}>{locale === 'ru' ? 'Экспертиза' : locale === 'en' ? 'Expertise' : 'Ekspertiza arizasi'}</button>
-          
-          <div style={{ position: 'relative' }} onMouseLeave={() => setSeminarMenuOpen(false)}>
-            <button className={`text-link ${(tab === 'seminar' || tab === 'kengash') ? 'active-tab' : ''}`} onClick={() => setSeminarMenuOpen(!seminarMenuOpen)}>
-              {locale === 'ru' ? 'Научный семинар / совет' : locale === 'en' ? 'Scientific Seminar / Council' : 'Ilmiy seminarga / bir martalik kengashga'}
-            </button>
-            {seminarMenuOpen && (
-              <div style={{ position: 'absolute', top: '100%', left: 0, background: '#1c211f', border: '1px solid #333', borderRadius: '4px', padding: '5px', display: 'flex', flexDirection: 'column', gap: '2px', zIndex: 100, minWidth: '180px', marginTop: '5px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}>
-                <button className={`text-link ${tab === 'seminar' ? 'active-tab' : ''}`} onClick={() => { setTab('seminar'); setSeminarMenuOpen(false); }} style={{ textAlign: 'left', padding: '6px 10px', fontSize: '13px' }}>{locale === 'ru' ? 'Научный семинар' : locale === 'en' ? 'Scientific Seminar' : 'Ilmiy seminarga'}</button>
-                <button className={`text-link ${tab === 'kengash' ? 'active-tab' : ''}`} onClick={() => { setTab('kengash'); setSeminarMenuOpen(false); }} style={{ textAlign: 'left', padding: '6px 10px', fontSize: '13px' }}>{locale === 'ru' ? 'Разовый совет' : locale === 'en' ? 'One-time Council' : 'Bir martalik kengashga'}</button>
-              </div>
-            )}
+    <header className="rp-header">
+      <div className="rp-header-inner">
+        <div className="rp-topline">
+          <BrandMark locale={locale} variant="portal" onClick={(e) => { e.preventDefault(); go('dashboard') }} />
+          <div className="rp-tools">
+            <SyncIndicator isOnline={isOnline} isSyncing={isSyncing} syncError={syncError} lastSyncTime={lastSyncTime} onSync={doFetchSync} compact />
+            <div className="locale-picker rp-locale" aria-label="Interfeys tili">{['uz', 'ru', 'en'].map((language) => <button key={language} className={locale === language ? 'locale-active' : ''} onClick={() => setLocale(language)}>{language.toUpperCase()}</button>)}</div>
+            <div className="rp-user" title={user.researcherName}>
+              <span className="rp-avatar">{initials}</span>
+              <span className="rp-user-text"><strong>{user.researcherName}</strong><small>{user.stage}-{tr('bosqich', 'этап', 'stage')} · {user.username}</small></span>
+            </div>
+            <button className="rp-logout" onClick={onLogout} title={tr('Chiqish', 'Выйти', 'Logout')} aria-label={tr('Chiqish', 'Выйти', 'Logout')}><LogOut size={17} /><span>{tr('Chiqish', 'Выйти', 'Logout')}</span></button>
           </div>
-          
-          <button className={`text-link ${tab === 'post_defense' ? 'active-tab' : ''}`} onClick={() => setTab('post_defense')}>
-            {locale === 'ru' ? 'После защиты' : locale === 'en' ? 'Post-defense' : 'Himoyadan keyingi hujjatlar'}
-            {rejectedCount > 0 && (
-              <span style={{ marginLeft: '5px', background: '#dc2626', color: '#fff', fontSize: '10px', padding: '1px 5px', borderRadius: '10px', fontWeight: 'bold' }}>!</span>
-            )}
-          </button>
+        </div>
 
-          <button className={`text-link ${tab === 'nizom' ? 'active-tab' : ''}`} onClick={() => setTab('nizom')}>{locale === 'ru' ? 'Нормы' : locale === 'en' ? 'Norms' : 'Nizom va Me’yorlar'}</button>
-          <button className={`text-link ${tab === 'settings' ? 'active-tab' : ''}`} onClick={() => setTab('settings')}>{locale === 'ru' ? 'Настройки' : locale === 'en' ? 'Settings' : 'Sozlamalar'}</button>
+        <nav className={`rp-navbar ${mobileMenuOpen ? 'rp-navbar-open' : ''}`} aria-label={tr('Asosiy menyu', 'Главное меню', 'Main menu')}>
+          <button className="rp-burger" aria-label={tr('Menyuni ochish', 'Открыть меню', 'Open menu')} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>
+            {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+            <span>{navItems.find((item) => item.key === tab)?.label || seminarItems.find((item) => item.key === tab)?.title}</span>
+          </button>
+          <div className="rp-nav-items">
+            {navItems.map(({ key, icon: Icon, label, alert: hasAlert }) => key === 'seminar_group' ? (
+              <div key={key} className="rp-dropdown" ref={seminarRef}>
+                <button className={`rp-nav-item ${seminarActive ? 'active' : ''}`} aria-haspopup="true" aria-expanded={seminarMenuOpen} onClick={() => setSeminarMenuOpen((open) => !open)}>
+                  <Icon size={16} /><span>{label}</span><ChevronDown size={15} className={`rp-chevron ${seminarMenuOpen ? 'open' : ''}`} />
+                </button>
+                {seminarMenuOpen && (
+                  <div className="rp-dropdown-panel" role="menu">
+                    {seminarItems.map((item) => (
+                      <button key={item.key} role="menuitem" className={`rp-dropdown-item ${tab === item.key ? 'active' : ''}`} onClick={() => go(item.key)}>
+                        <span className="rp-dropdown-icon"><UsersRound size={17} /></span>
+                        <span><strong>{item.title}</strong><small>{item.note}</small></span>
+                        <ChevronRight size={15} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button key={key} className={`rp-nav-item ${tab === key ? 'active' : ''}`} onClick={() => go(key)}>
+                <Icon size={16} /><span>{label}</span>{hasAlert && <i className="rp-nav-alert" title={tr('Qaytarilgan hujjat bor', 'Есть возвращённые документы', 'Returned documents')}>!</i>}
+              </button>
+            ))}
+          </div>
         </nav>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-        <SyncIndicator isOnline={isOnline} isSyncing={isSyncing} syncError={syncError} lastSyncTime={lastSyncTime} onSync={doFetchSync} compact />
-        <div className="locale-picker" aria-label="Interfeys tili">{['uz', 'ru', 'en'].map((language) => <button key={language} className={locale === language ? 'locale-active' : ''} onClick={() => setLocale(language)}>{language.toUpperCase()}</button>)}</div>
-        <button className="secondary-button" onClick={onLogout}>{locale === 'ru' ? 'Выйти' : locale === 'en' ? 'Logout' : 'Chiqish'}</button>
-      </div>
     </header>
-    
+    {mobileMenuOpen && <button className="rp-scrim" aria-label={tr('Menyuni yopish', 'Закрыть меню', 'Close menu')} onClick={() => setMobileMenuOpen(false)} />}
+
     {tab === 'dashboard' && <ResearcherDashboard user={user} normativeDocuments={normativeDocuments} locale={locale} />}
     {tab === 'documents' && <ResearcherDocumentsApp user={user} files={monitoringFiles} setFiles={setMonitoringFiles} reports={monitoringReports} setReports={setMonitoringReports} locale={locale} />}
     {tab === 'expertise' && <ResearcherExpertiseApp user={user} expertiseCases={expertiseCases} setExpertiseCases={setExpertiseCases} locale={locale} />}
