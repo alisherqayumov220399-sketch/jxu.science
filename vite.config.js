@@ -1,31 +1,9 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-
-function spa404Plugin() {
-  return {
-    name: 'spa-404-fallback',
-    closeBundle() {
-      try {
-        const distIndex = path.resolve(__dirname, 'dist/index.html')
-        const dist404 = path.resolve(__dirname, 'dist/404.html')
-        if (fs.existsSync(distIndex)) {
-          fs.copyFileSync(distIndex, dist404)
-        }
-      } catch (e) {
-        console.warn('404.html copy skipped:', e.message)
-      }
-    }
-  }
-}
-
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), spa404Plugin()],
+  plugins: [react()],
   base: './',
   server: {
     port: 5173,

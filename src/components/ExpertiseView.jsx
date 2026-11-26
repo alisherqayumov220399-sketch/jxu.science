@@ -4,7 +4,7 @@ import { REQUIRED_DOCUMENTS } from '../data/expertiseData.js'
 import ProtocolModal from './ProtocolModal.jsx'
 import { openOrDownloadFile } from '../api/apiService.js'
 
-export default function ExpertiseView({ expertiseCases, setExpertiseCases, onNavigateNizom, researchers = [] }) {
+export default function ExpertiseView({ expertiseCases, setExpertiseCases, onNavigateNizom, researchers = [], locale = 'uz' }) {
   const [viewMode, setViewMode] = useState('pipeline') // 'pipeline', 'table', 'checklist', 'exempt'
   const [filterDegree, setFilterDegree] = useState('all') // 'all', 'PhD', 'DSc'
   const [searchQuery, setSearchQuery] = useState('')
@@ -54,11 +54,13 @@ export default function ExpertiseView({ expertiseCases, setExpertiseCases, onNav
 
     const initialDocs = {}
     REQUIRED_DOCUMENTS.forEach((doc) => {
-      initialDocs[doc.key] = true // initial checked for demo
+      initialDocs[doc.key] = false
     })
 
+    const matchedResearcher = researchers.find((r) => r.name === newApplicant.researcherName.trim())
     const newCase = {
-      id: `exp-${Date.now()}`,
+      id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      username: matchedResearcher?.username || undefined,
       researcherName: newApplicant.researcherName.trim(),
       degree: newApplicant.degree,
       field: newApplicant.field.trim() || 'Ixtisoslik ko‘rsatilmagan',
@@ -101,7 +103,7 @@ export default function ExpertiseView({ expertiseCases, setExpertiseCases, onNav
       resolution: null,
     }
 
-    setExpertiseCases([newCase, ...expertiseCases])
+    setExpertiseCases((items) => [newCase, ...items])
     setAddModalOpen(false)
     setNewApplicant({
       researcherName: '',
@@ -122,12 +124,14 @@ export default function ExpertiseView({ expertiseCases, setExpertiseCases, onNav
     setExpertiseCases((prev) =>
       prev.map((c) => {
         if (c.id !== caseId) return c
+        // Izlanuvchi yuklagan fayllar ro'yxatini belgilash tugmasi o'chirib yubormasligi kerak
+        if (Array.isArray(c.documentsStatus?.[docKey])) return c
         const currentVal = !!c.documentsStatus?.[docKey]
         const updatedDocs = { ...c.documentsStatus, [docKey]: !currentVal }
         return { ...c, documentsStatus: updatedDocs }
       })
     )
-    if (selectedCase && selectedCase.id === caseId) {
+    if (selectedCase && selectedCase.id === caseId && !Array.isArray(selectedCase.documentsStatus?.[docKey])) {
       setSelectedCase((prev) => ({
         ...prev,
         documentsStatus: {
@@ -664,6 +668,7 @@ export default function ExpertiseView({ expertiseCases, setExpertiseCases, onNav
       {selectedCase && (
         <CaseDetailsModal
           item={selectedCase}
+          locale={locale}
           onClose={() => setSelectedCase(null)}
           onToggleDoc={(docKey) => toggleDocument(selectedCase.id, docKey)}
           onUpdateStatus={(status, res) => updateCaseStatus(selectedCase.id, status, res)}
@@ -890,7 +895,7 @@ function PipelineCard({ item, onSelect, onOpenProtocol }) {
   )
 }
 
-function CaseDetailsModal({ item, onClose, onToggleDoc, onUpdateStatus, onOpenProtocol }) {
+function CaseDetailsModal({ item, onClose, onToggleDoc, onUpdateStatus, onOpenProtocol, locale = 'uz' }) {
   const isLaw = /huquq|12\.00/i.test(item.field)
   const docsCount = Object.values(item.documentsStatus || {}).filter(v => Array.isArray(v) ? v.length > 0 : !!v).length
 

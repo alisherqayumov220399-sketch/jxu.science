@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { POST_DEFENSE_DOCUMENTS, POST_DEFENSE_STATUSES } from '../data/postDefenseData';
 import { uploadRealFile, openOrDownloadFile } from '../api/apiService';
+import { uid } from '../utils/id.js';
 
 export function PostDefenseStudentView({ user, postDefenseFiles, setPostDefenseFiles, locale }) {
   const [selectedReqId, setSelectedReqId] = useState('');
@@ -64,16 +65,12 @@ export function PostDefenseStudentView({ user, postDefenseFiles, setPostDefenseF
     setUploadError('');
     setIsUploading(true);
     try {
-      const uploadRes = await uploadRealFile(file, 'Himoyadan keyingi hujjat', {
-        username: user.username,
-        researcherName: user.name || user.username,
-        reqId
-      });
+      const uploadRes = await uploadRealFile(file, 'Himoyadan keyingi hujjat', { reqId });
       const newFile = {
-        id: crypto.randomUUID(),
+        id: uid('pd'),
         reqId,
         username: user.username,
-        researcherName: user.name || user.username,
+        researcherName: user.researcherName || user.name || user.username,
         name: file.name,
         fileUrl: uploadRes.fileUrl,
         size: file.size,
@@ -107,20 +104,7 @@ export function PostDefenseStudentView({ user, postDefenseFiles, setPostDefenseF
   };
 
   const handleDownload = (file) => {
-    if (file.fileUrl) {
-      openOrDownloadFile(file.fileUrl, file.name);
-      return;
-    }
-    const dummyContent = `Hujjat: ${file.name}\nTalabgor: ${file.researcherName}\nYuklangan sana: ${file.date}\nHolat: ${file.status}\n\nBu tizim orqali yuklangan nusxa.`;
-    const blob = new Blob([dummyContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = file.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    openOrDownloadFile(file.fileUrl, file.name);
   };
 
   return (
@@ -173,6 +157,11 @@ export function PostDefenseStudentView({ user, postDefenseFiles, setPostDefenseF
       {uploadError && (
         <div className="upload-error" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '6px', color: '#b91c1c', marginTop: '15px' }}>
           <CircleAlert size={18} /> <span>{uploadError}</span>
+        </div>
+      )}
+      {isUploading && (
+        <div style={{ padding: '10px 14px', background: '#eff6ff', color: '#1e40af', borderRadius: '6px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+          <Loader2 size={15} className="spin" /> {locale === 'ru' ? 'Файл загружается...' : locale === 'en' ? 'Uploading file...' : 'Fayl yuklanmoqda...'}
         </div>
       )}
       {successMessage && (
@@ -648,20 +637,7 @@ export function PostDefenseAdminView({ postDefenseFiles, setPostDefenseFiles, re
   };
 
   const handleDownload = (file) => {
-    if (file.fileUrl) {
-      openOrDownloadFile(file.fileUrl, file.name);
-      return;
-    }
-    const dummyContent = `Hujjat: ${file.name}\nTalabgor: ${file.researcherName}\nYuklangan sana: ${file.date}\nHolat: ${file.status}\nQaytarish sababi: ${file.rejectReason || 'Mavjud emas'}`;
-    const blob = new Blob([dummyContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = file.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    openOrDownloadFile(file.fileUrl, file.name);
   };
 
   // Detail view for a specific researcher's dossier

@@ -1,102 +1,82 @@
-# "Ilm+" Tizimini To'liq Ishchi Holatda Ishlatish va Internetga Joylash Qo'llanmasi
+# Ilm+ tizimini ishga tushirish va internetga joylash
 
-Ushbu loyiha **"Ilm+ | Mustaqil izlanuvchilar monitoringi"** axborot tizimi bo'lib, **Markaziy Server (Node.js/Express) + Real Fayllar Bazasi (Multer/JSON DB) + Zamonaviy Frontend (React SPA)** to'liq integratsiya qilingan holda ishchi holatga keltirildi.
-
-Endi brauzer `localStorage` cheklovlari olib tashlandi:
-1. **Markaziy Ma'lumotlar Bazasi**: `backend/data/db.json` faylida barcha tadqiqotchilar, hisoblar, arizalar, monitoring hisobotlari, kengash va himoyadan keyingi bosqich ma'lumotlari saqlanadi.
-2. **Haqiqiy Fayllar Ombori**: Tadqiqotchi yoki admin yuklagan barcha fayllar (`.pdf`, `.docx`, `.zip`, `.xlsx`, `.jpg`) serverning `backend/uploads/` papkasiga saqlanadi va hamma tomonidan original holatda yuklab olinadi.
-3. **Jonli Ikki Tomonlama Sinxronizatsiya (Real-Time Live Sync)**:
-   - Tadqiqotchi ariza yuborsa yoki hujjat yuklasa, Admin panelida bir necha soniyada avtomatik aks etadi.
-   - Admin arizani qabul qilsa yoki rad etsa, tadqiqotchi kabinetida sahifani yangilamasdan (real-vaqtda) yangilanadi.
+Tizim ikki qismdan iborat: **React frontend** va **Node.js server**. Server
+bir vaqtning o'zida frontendni ham tarqatadi, shuning uchun bitta Node.js
+xizmatini ishga tushirish yetarli. Faqat statik hosting (GitHub Pages, Netlify,
+Vercel) **yetarli emas** — u yerda server, baza va fayl ombori ishlamaydi.
 
 ---
 
-## 1. O'z Kompyuteringizda (Lokal Tarmoqda) Ishga Tushirish
+## 1. O'z kompyuteringizda yoki lokal tarmoqda
 
-### Eng oson usul:
-- Loyiha papkasidagi **`saytni-ochish.bat`** faylini ikki marta bosing.
-- Tizim serverni ishga tushiradi va brauzerda `http://localhost:5000` manzilini ochadi.
+1. [Node.js](https://nodejs.org) (LTS, 20+) o'rnating.
+2. Windows: `saytni-ochish.bat` faylini ikki marta bosing.
+   Boshqa tizimlar: `npm install`, `npm run build`, `npm start`.
+3. Konsolda chiqqan **admin login va parolni** yozib oling
+   (nusxasi: `backend/data/ADMIN_PAROL.txt`).
+4. Brauzerda `http://localhost:5000` ni oching.
 
-### Terminal orqali:
+Institut tarmog'idagi boshqa kompyuterlardan kirish uchun server kompyuterining
+IP manzilidan foydalaning, masalan `http://192.168.1.45:5000`
+(IP manzilni `ipconfig` buyrug'i bilan bilib olasiz).
+
+---
+
+## 2. Internetga joylash (Render.com)
+
+1. Repozitoriyni GitHub'ga yuklang. **Tavsiya:** repozitoriyni *Private*
+   (yopiq) qiling.
+2. [Render.com](https://render.com) → **New + → Blueprint** → repozitoriyni
+   tanlang. `render.yaml` fayli barcha sozlamalarni o'zi qo'yadi.
+3. `ADMIN_PASSWORD` qiymatini kiriting (yoki bo'sh qoldiring — parol
+   xizmat jurnalida (Logs) chiqadi).
+4. Deploy tugagach berilgan manzil (masalan `https://ilm-monitoring.onrender.com`)
+   orqali tizimga kiring.
+
+> **Muhim:** ma'lumotlar saqlanib qolishi uchun doimiy disk (persistent disk)
+> kerak — `render.yaml` uni `/var/data` ga ulaydi. Disk faqat pullik tarifda
+> mavjud. Bepul tarifda server har qayta ishga tushganda baza va fayllar
+> o'chib ketadi.
+
+### Boshqa hostinglar (Railway, VPS, Docker)
+
+- Build: `npm ci && npm run build`, start: `npm start`.
+- `DATA_DIR` muhit o'zgaruvchisini doimiy diskdagi papkaga yo'naltiring.
+- Docker: `docker build -t ilm .` va
+  `docker run -p 5000:5000 -v ilm-data:/data ilm`.
+
+---
+
+## 3. Eski ma'lumotlarni yangi serverga ko'chirish
+
+Avvalgi versiyada baza `backend/data/db.json` sifatida repozitoriyda turgan
+edi. Endi u xavfsizlik sababli git'dan olib tashlandi. Mavjud ma'lumotlarni
+saqlab qolish uchun:
+
+1. Eski faylni tiklang:
+   `git show 29a5ab2:backend/data/db.json > eski-baza.json`
+2. Yangi serverda admin sifatida kiring → **Sozlamalar → Zaxiradan tiklash** →
+   `eski-baza.json` ni tanlang.
+3. Eski parollar ommaviy repozitoriyda ochiq turgani sababli,
+   **Sozlamalar → Parollarni yangilash** tugmasi bilan barcha izlanuvchilar
+   uchun yangi parollar yarating va Excel faylni izlanuvchilarga tarqating.
+
+---
+
+## 4. Admin parolini unutgan bo'lsangiz
+
+Serverni to'xtating va bajaring:
+
 ```bash
-# Barcha komponentlarni bitta serverda ishga tushirish (Frontend + Backend API):
-npm start
+npm run reset-admin
 ```
 
-### Xona yoki Institut Wi-Fi tarmog'idagi boshqa kompyuter va telefonlardan kirish:
-1. Kompyuteringizning mahalliy IP manzilini bilib oling (Terminalda `ipconfig` deb yozing, masalan `192.168.1.45`).
-2. Institutdagi tadqiqotchilar o'z kompyuteri yoki telefonidan quyidagi manzilga kirishadi:
-   ```
-   http://192.168.1.45:5000
-   ```
-3. Barcha foydalanuvchilar bitta umumiy bazaga ulanadi va real vaqtda bir-birlarining ma'lumotlarini ko'rishadi!
+Yangi parol konsolga va `ADMIN_PAROL.txt` fayliga yoziladi.
 
 ---
 
-## 2. Saytni Butun Dunyo Bo'yicha Real Internetga Bepul Joylash (24/7 Rejim)
+## 5. Zaxira nusxa
 
-Haqiqiy fayllar va ma'lumotlar bazasi ishlashi uchun sayt Node.js server bilan birga internetga joylanishi kerak. Quyidagi usullar **100% bepul** va eng qulayidir:
-
-### 1-usul: Render.com (Tavsiya etiladi - Eng oson va professional)
-1. Loyihani o'z GitHub hisobingizga yuklang (`git push origin main`).
-2. [Render.com](https://render.com) saytiga kiring va ro'yxatdan o'ting.
-3. **"New +"** tugmasini bosib, **"Web Service"** ni tanlang.
-4. GitHub omboringizni tanlang va quyidagi sozlamalarni kiriting:
-   - **Name**: `ilm-monitoring` (yoki ixtiyoriy nom)
-   - **Environment**: `Node`
-   - **Build Command**: `npm install && npm run build`
-   - **Start Command**: `npm start`
-   - **Plan**: `Free`
-5. **"Deploy Web Service"** tugmasini bosing.
-6. 2 daqiqada sizga bepul xavfsiz internet havolasi beriladi (masalan: `https://ilm-monitoring.onrender.com`).
-   *Ushbu havola orqali dunyoning istalgan joyidan admin ham, tadqiqotchilar ham tizimga kira oladilar.*
-
----
-
-### 2-usul: Railway.app (Juda tez va qulay)
-1. [Railway.app](https://railway.app) ga kiring va GitHub orqali kiring.
-2. **"New Project"** -> **"Deploy from GitHub repo"** ni tanlang.
-3. Loyihangizni tanlang. Railway loyihani o'zi aniqlab, avtomatik `npm start` orqali ishga tushiradi.
-4. **Settings** -> **Generate Domain** tugmasini bosing va bepul manzilga ega bo'ling.
-
----
-
-### 3-usul: O'z kompyuteringizni darhol Internetga chiqarish (Ngrok yoki Localtunnel)
-Agar server xarid qilmasdan, kompyuteringizdagi serverni 1 daqiqada butun internetga ochib bermoqchi bo'lsangiz:
-1. Kompyuteringizda serverni yoqing: `npm start`
-2. Yangi terminal ochib, quyidagi buyruqni bering:
-   ```bash
-   npx localtunnel --port 5000
-   ```
-3. Terminal sizga internet havolasi beradi (masalan: `https://smooth-ox-45.loca.lt`).
-4. Ushbu havolani tadqiqotchilarga bersangiz, ular to'g'ridan-to'g'ri tizimga kirib ma'lumot kiritishlari mumkin!
-
----
-
-## 3. Sinov Uchun Kirish Ma'lumotlari
-
-### Administrator Kabineti:
-- **Login**: `admin`
-- **Parol**: `admin123`
-
-### Tadqiqotchi Kabinetlari (Namunalar):
-1. **Mamatov Dilshod**:
-   - **Login**: `dilshod`
-   - **Parol**: `dilshod123`
-2. **Xasanov Baxtiyor**:
-   - **Login**: `baxrom`
-   - **Parol**: `baxrom123`
-3. **Qodirova Shahnoza**:
-   - **Login**: `nodir`
-   - **Parol**: `nodir123`
-
-*(Shuningdek, Admin panelida yangi tadqiqotchilarni ro'yxatga olish, ularga login/parol berish va parollarini o'zgartirish to'liq ishchi holatda).*
-
----
-
-## 4. Tizimda Integratsiya Qilingan Asosiy Bo'limlar:
-- **Dastlabki Ekspertiza**: Tadqiqotchi dissertatsiya arizasini va 11 ta nizom hujjatlarini yuklaydi. Admin ularni ko'radi, fayllarni yuklab oladi, xulosa shakllantiradi va kengashga tavsiya etadi.
-- **Ish Reja va Monitoring**: Tadqiqotchi choraklik ish reja hujjatlarini (.pdf, .docx) yuklaydi. Admin barcha hujjatlarni ko'radi, hisobotlarni tasdiqlaydi yoki qaytaradi.
-- **Kengash jarayoni**: Kengash hujjatlari va qarorlari almashiladi.
-- **Himoyadan keyingi monitoring**: OAK uchun zarur bo'lgan hujjatlar shakllantiriladi va yuklanadi.
-- **Ichki normativ hujjatlar**: Admin yuklagan universitet nizomlarini barcha tadqiqotchilar o'z kabinetlaridan yuklab oladilar.
+**Sozlamalar → Ma'lumotlar bazasining zaxira nusxasi → Yuklab olish** tugmasi
+butun bazani JSON fayl sifatida beradi. Uni muntazam (masalan haftada bir)
+saqlab boring. Yuklangan fayllar (`uploads` papkasi) alohida nusxalanadi.

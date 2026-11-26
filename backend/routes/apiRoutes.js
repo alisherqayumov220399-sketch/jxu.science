@@ -1,361 +1,243 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import express from 'express';
 import multer from 'multer';
-import path from 'node:path';
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { ALLOWED_UPLOAD_EXTENSIONS, MAX_UPLOAD_BYTES, UPLOAD_DIR } from '../config.js';
 import {
   getDatabase,
   getRevision,
   mutateDatabase,
-  addActivity
+  makeActivityEntry,
+  replaceDatabase,
+  saveDatabaseSync,
+  ACTIVITY_LOG_LIMIT,
+  COLLECTIONS
 } from '../data/dbManager.js';
+import {
+  authenticate,
+  clearFailedLogins,
+  createToken,
+  hashPassword,
+  loginRateLimited,
+  publicUser,
+  registerFailedLogin,
+  requireAdmin,
+  requireAuth,
+  verifyPasswordHash
+} from '../auth.js';
+import { applyChanges, scopeForPrincipal } from '../syncLogic.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const router = express.Router();
 
-const uploadDir = path.join(__dirname, '../uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+/* ============================================================
+   FAYL YUKLASH SOZLAMALARI
+   ============================================================ */
 
-// Multer storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, uploadDir);
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    cb(null, UPLOAD_DIR);
   },
   filename: (req, file, cb) => {
-    const safeBase = path.basename(file.originalname, path.extname(file.originalname))
-      .replace(/[^a-zA-Z0-9_\-\.]/g, '_')
-      .slice(0, 50);
     const ext = path.extname(file.originalname).toLowerCase();
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e6);
-    cb(null, `${uniqueSuffix}_${safeBase}${ext}`);
+    // Taxmin qilib bo'lmaydigan nom: fayllarni begona odamlar topa olmaydi
+    cb(null, `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext}`);
   }
 });
-
-const fileFilter = (req, file, cb) => {
-  const allowed = ['.pdf', '.doc', '.docx', '.zip', '.xlsx', '.xls', '.jpg', '.jpeg', '.png'];
-  const ext = path.extname(file.originalname).toLowerCase();
-  if (allowed.includes(ext)) {
-    cb(null, true);
-  } else {
-    cb(new Error(`Faqat ruxsat etilgan fayl formatlari: ${allowed.join(', ')}`));
-  }
-};
 
 const upload = multer({
   storage,
-  fileFilter,
-  limits: { fileSize: 100 * 1024 * 1024 } // 100 MB
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
+  fileFilter: (req, file, cb) => {
+    // Brauzerlar ba'zan fayl nomini latin1 sifatida yuboradi — UTF-8 ga tiklaymiz
+    try {
+      const decoded = Buffer.from(file.originalname, 'latin1').toString('utf8');
+      if (!decoded.includes('�')) file.originalname = decoded;
+    } catch { /* ignore */ }
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ALLOWED_UPLOAD_EXTENSIONS.includes(ext)) cb(null, true);
+    else cb(Object.assign(new Error(`Faqat ruxsat etilgan fayl formatlari: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}`), { status: 400 }));
+  }
+});
+
+function clientKey(req, username) {
+  return `${req.ip}|${String(username || '').toLowerCase()}`;
+}
+
+/* ============================================================
+   1. AUTENTIFIKATSIYA
+   ============================================================ */
+
+router.post('/auth/login', (req, res) => {
+  const { username, password, role } = req.body || {};
+  const key = clientKey(req, username);
+  if (loginRateLimited(key) || loginRateLimited(req.ip)) {
+    return res.status(429).json({ success: false, message: "Juda ko'p noto'g'ri urinish. 15 daqiqadan so'ng qayta urinib ko'ring." });
+  }
+  const principal = authenticate(username, password, role);
+  if (!principal) {
+    registerFailedLogin(key);
+    registerFailedLogin(req.ip);
+    return res.status(401).json({
+      success: false,
+      message: role === 'admin' ? 'Admin logini yoki paroli noto‘g‘ri.' : 'Login yoki parol noto‘g‘ri.'
+    });
+  }
+  clearFailedLogins(key);
+  res.json({ success: true, token: createToken(principal), user: publicUser(principal) });
+});
+
+router.get('/auth/me', requireAuth, (req, res) => {
+  res.json({ success: true, user: publicUser(req.principal) });
+});
+
+router.post('/auth/change-password', requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  const next = String(newPassword || '');
+  if (next.length < 6) {
+    return res.status(400).json({ success: false, message: 'Yangi parol kamida 6 ta belgidan iborat bo‘lishi kerak.' });
+  }
+  const principal = req.principal;
+  const db = getDatabase();
+
+  if (principal.role === 'admin') {
+    if (!verifyPasswordHash(currentPassword, db.admin.passwordHash)) {
+      return res.status(400).json({ success: false, message: 'Joriy parol noto‘g‘ri.' });
+    }
+    mutateDatabase((d) => {
+      d.admin = { ...d.admin, passwordHash: hashPassword(next), updatedAt: new Date().toISOString() };
+    });
+  } else {
+    if (String(currentPassword || '') !== String(principal.account.password || '')) {
+      return res.status(400).json({ success: false, message: 'Joriy parol noto‘g‘ri.' });
+    }
+    mutateDatabase((d) => {
+      d.accounts = d.accounts.map((a) => (a.username === principal.account.username ? { ...a, password: next } : a));
+    });
+  }
+  saveDatabaseSync();
+
+  // Yangi parol bilan yangi token (eski tokenlar avtomatik bekor bo'ladi)
+  const refreshed = authenticate(principal.username, next, principal.role);
+  res.json({ success: true, message: 'Parol muvaffaqiyatli yangilandi.', token: refreshed ? createToken(refreshed) : null });
 });
 
 /* ============================================================
-   1. SYNC & REVISION ENDPOINTS
+   2. SINXRONIZATSIYA
    ============================================================ */
 
-/**
- * GET /api/sync
- * Barcha ma'lumotlar va reviziya raqamini olish
- */
-router.get('/sync', (req, res) => {
-  try {
-    const db = getDatabase();
-    res.json({
-      success: true,
-      revision: db.revision,
-      lastModified: db.lastModified,
-      data: {
-        accounts: db.accounts || [],
-        researchers: db.researchers || [],
-        expertiseCases: db.expertiseCases || [],
-        monitoringFiles: db.monitoringFiles || [],
-        monitoringReports: db.monitoringReports || [],
-        kengashFiles: db.kengashFiles || [],
-        postDefenseFiles: db.postDefenseFiles || [],
-        activityLog: db.activityLog || [],
-        normativeDocuments: db.normativeDocuments || []
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+router.get('/sync', requireAuth, (req, res) => {
+  const db = getDatabase();
+  res.json({
+    success: true,
+    revision: db.revision,
+    lastModified: db.lastModified,
+    data: scopeForPrincipal(db, req.principal)
+  });
 });
 
-/**
- * GET /api/sync/version
- * Tezkor reviziya tekshiruvi (Polling uchun)
- */
-router.get('/sync/version', (req, res) => {
-  try {
-    const rev = getRevision();
-    res.json({ success: true, ...rev });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+router.get('/sync/version', requireAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ success: true, ...getRevision() });
 });
 
 /**
  * POST /api/sync
- * To'liq yoki qisman sinxronizatsiya
+ * body: { changes: { [collection]: { upsert: [...], remove: [...] } } }
  */
-router.post('/sync', (req, res) => {
-  try {
-    const { collections, actorName, actorAction } = req.body;
-    if (!collections || typeof collections !== 'object') {
-      return res.status(400).json({ success: false, message: "collections obyekti talab qilinadi" });
-    }
-
-    const result = mutateDatabase((db) => {
-      const allowedKeys = [
-        'accounts',
-        'researchers',
-        'expertiseCases',
-        'monitoringFiles',
-        'monitoringReports',
-        'kengashFiles',
-        'postDefenseFiles',
-        'activityLog',
-        'normativeDocuments'
-      ];
-
-      for (const key of allowedKeys) {
-        if (Array.isArray(collections[key])) {
-          db[key] = collections[key];
-        }
-      }
-
-      if (actorName && actorAction) {
-        const newEntry = {
-          id: `act-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          name: actorName,
-          action: actorAction,
-          time: new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })
-        };
-        db.activityLog = [newEntry, ...(db.activityLog || [])].slice(0, 30);
-      }
-    });
-
-    const db = getDatabase();
-    res.json({
-      success: true,
-      revision: result.revision,
-      lastModified: result.lastModified,
-      data: db
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+router.post('/sync', requireAuth, (req, res) => {
+  const { changes } = req.body || {};
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+    return res.status(400).json({ success: false, message: "changes obyekti talab qilinadi" });
   }
+  const before = getRevision().revision;
+  let outcome = { applied: 0, rejected: 0 };
+  const result = mutateDatabase((db) => {
+    outcome = applyChanges(db, req.principal, changes);
+  });
+  res.json({
+    success: true,
+    revision: result.revision,
+    previousRevision: before,
+    lastModified: result.lastModified,
+    ...outcome
+  });
 });
 
 /* ============================================================
-   2. FILE UPLOAD & DOWNLOAD ENDPOINTS
+   3. FAYLLAR
    ============================================================ */
 
-/**
- * POST /api/upload
- * Har qanday ruxsat etilgan faylni serverga yuklash
- */
-router.post('/upload', upload.single('file'), (req, res) => {
-  try {
+router.post('/upload', requireAuth, (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? `Fayl hajmi ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB dan oshmasligi kerak.`
+        : err.message;
+      return res.status(400).json({ success: false, message });
+    }
     if (!req.file) {
-      return res.status(400).json({ success: false, message: "Fayl biriktirilmadi!" });
+      return res.status(400).json({ success: false, message: 'Fayl biriktirilmadi!' });
     }
-
-    const fileUrl = `/uploads/${req.file.filename}`;
-    const result = {
-      fileUrl,
-      fileName: req.file.filename,
-      originalName: req.file.originalname,
-      size: req.file.size,
-      mimeType: req.file.mimetype,
-      uploadedAt: new Date().toISOString()
-    };
-
-    const { category, username, researcherName } = req.body;
-    if (researcherName && category) {
-      addActivity(researcherName, `${category} uchun fayl yukladi: ${req.file.originalname}`);
-    }
-
-    res.status(201).json({
-      success: true,
-      message: "Fayl serverga muvaffaqiyatli yuklandi!",
-      data: result
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-/**
- * GET /api/download/:filename
- * Faylni brauzer orqali yuklab olish majburlash
- */
-router.get('/download/:filename', (req, res) => {
-  try {
-    const filename = path.basename(req.params.filename);
-    const filePath = path.join(uploadDir, filename);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, message: "Fayl serverda topilmadi!" });
-    }
-    res.download(filePath);
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-/* ============================================================
-   3. AUTHENTICATION ENDPOINTS
-   ============================================================ */
-
-/**
- * POST /api/auth/login
- */
-router.post('/auth/login', (req, res) => {
-  try {
-    const { username, password } = req.body;
-    const cleanUser = String(username || '').trim();
-
-    if (cleanUser === 'admin' && password === 'admin123') {
-      return res.json({
+    try {
+      const { category } = req.body || {};
+      const actor = publicUser(req.principal);
+      if (category) {
+        mutateDatabase((db) => {
+          db.activityLog = [
+            makeActivityEntry(actor.researcherName || actor.name, `${category}: fayl yukladi (${req.file.originalname})`),
+            ...db.activityLog
+          ].slice(0, ACTIVITY_LOG_LIMIT);
+        });
+      }
+      res.status(201).json({
         success: true,
-        user: { role: 'admin', username: 'admin', name: 'Administrator' }
+        message: 'Fayl serverga muvaffaqiyatli yuklandi!',
+        data: {
+          fileUrl: `/uploads/${req.file.filename}`,
+          fileName: req.file.filename,
+          originalName: req.file.originalname,
+          size: req.file.size,
+          mimeType: req.file.mimetype,
+          uploadedAt: new Date().toISOString()
+        }
       });
+    } catch (e) {
+      next(e);
     }
-
-    const db = getDatabase();
-    const account = (db.accounts || []).find(
-      (a) => a.username.toLowerCase() === cleanUser.toLowerCase() && a.password === password
-    );
-
-    if (account) {
-      return res.json({
-        success: true,
-        user: { role: 'researcher', ...account }
-      });
-    }
-
-    res.status(401).json({
-      success: false,
-      message: 'Foydalanuvchi logini yoki parol noto‘g‘ri!'
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  });
 });
 
-/**
- * POST /api/auth/update-password
- */
-router.post('/auth/update-password', (req, res) => {
-  try {
-    const { username, newPassword } = req.body;
-    if (!username || !newPassword) {
-      return res.status(400).json({ success: false, message: "Username va yangi parol talab qilinadi" });
-    }
-
-    let found = false;
-    mutateDatabase((db) => {
-      db.accounts = (db.accounts || []).map((acc) => {
-        if (acc.username.toLowerCase() === username.toLowerCase()) {
-          found = true;
-          return { ...acc, password: newPassword };
-        }
-        return acc;
-      });
-    });
-
-    if (!found) {
-      return res.status(404).json({ success: false, message: "Foydalanuvchi hisobi topilmadi" });
-    }
-
-    res.json({ success: true, message: "Parol muvaffaqiyatli yangilandi" });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+router.get('/download/:filename', requireAuth, (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(UPLOAD_DIR, filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ success: false, message: 'Fayl serverda topilmadi!' });
   }
+  const downloadName = typeof req.query.name === 'string' ? path.basename(req.query.name) : filename;
+  res.download(filePath, downloadName);
 });
 
 /* ============================================================
-   4. POST-DEFENSE SPECIFIC STATUS & UPLOAD
+   4. ADMIN: ZAXIRA NUSXA
    ============================================================ */
 
-router.put('/post-defense/:id/status', (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, rejectReason } = req.body;
-
-    if (!['Qabul qilindi', 'Rad etildi', 'Kutilmoqda'].includes(status)) {
-      return res.status(400).json({ success: false, message: "Noto'g'ri holat!" });
-    }
-
-    let targetDoc = null;
-    mutateDatabase((db) => {
-      db.postDefenseFiles = (db.postDefenseFiles || []).map((doc) => {
-        if (doc.id === id) {
-          targetDoc = {
-            ...doc,
-            status,
-            rejectReason: status === 'Rad etildi' ? (rejectReason || '').trim() : '',
-            reviewedAt: new Date().toISOString()
-          };
-          return targetDoc;
-        }
-        return doc;
-      });
-    });
-
-    if (!targetDoc) {
-      return res.status(404).json({ success: false, message: "Hujjat topilmadi" });
-    }
-
-    addActivity(
-      'Administrator',
-      `Himoyadan keyingi hujjat holati o'zgartirildi: ${targetDoc.name} -> ${status}`
-    );
-
-    res.json({ success: true, data: targetDoc });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+router.get('/admin/backup', requireAdmin, (req, res) => {
+  const db = getDatabase();
+  const { admin: _admin, ...data } = db;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  res.set('Content-Disposition', `attachment; filename="ilm-baza-zaxira-${stamp}.json"`);
+  res.json(data);
 });
 
-/* ============================================================
-   5. KENGASH / SEMINAR STATUS
-   ============================================================ */
-
-router.put('/kengash/:id/status', (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, rejectReason } = req.body;
-
-    let targetDoc = null;
-    mutateDatabase((db) => {
-      db.kengashFiles = (db.kengashFiles || []).map((doc) => {
-        if (doc.id === id) {
-          targetDoc = {
-            ...doc,
-            status,
-            rejectReason: status === 'Rad etildi' ? (rejectReason || '').trim() : ''
-          };
-          return targetDoc;
-        }
-        return doc;
-      });
-    });
-
-    if (!targetDoc) {
-      return res.status(404).json({ success: false, message: "Hujjat topilmadi" });
-    }
-
-    addActivity(
-      'Administrator',
-      `Seminar/Kengash hujjati holati: ${targetDoc.name || 'Hujjat'} -> ${status}`
-    );
-
-    res.json({ success: true, data: targetDoc });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+router.post('/admin/restore', requireAdmin, (req, res) => {
+  const payload = req.body?.data ?? req.body;
+  if (!payload || typeof payload !== 'object' || !COLLECTIONS.some((key) => Array.isArray(payload[key]))) {
+    return res.status(400).json({ success: false, message: "Zaxira fayli noto'g'ri formatda." });
   }
+  const result = replaceDatabase(payload);
+  res.json({ success: true, message: 'Baza zaxiradan tiklandi.', ...result });
 });
 
 export default router;

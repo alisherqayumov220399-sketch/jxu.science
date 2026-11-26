@@ -1,20 +1,24 @@
 {
-  "name": "mustaqil-izlanuvchilar",
+  "name": "ilm-monitoring",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "dev:host": "vite --host",
+    "dev:server": "node --watch backend/server.js",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "serve": "vite preview",
-    "server": "node backend/server.js",
-    "start": "node backend/server.js"
+    "start": "node backend/server.js",
+    "test": "node --test backend/test/*.test.js",
+    "check": "npm run lint && npm test && npm run build",
+    "reset-admin": "node backend/scripts/reset-admin.js"
   },
   "dependencies": {
+    "express": "^4.22.3",
     "lucide-react": "^1.48.0",
+    "multer": "^2.5.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "read-excel-file": "^9.3.10",
@@ -26,5 +30,8 @@
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
     "vite": "^8.3.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

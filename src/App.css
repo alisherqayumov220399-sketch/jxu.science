@@ -1096,3 +1096,10 @@
 }
 
 
+
+/* Sozlamalar sahifasi — kechki rejimda matnlar o'qilishi uchun */
+.dark-mode .module-toolbar h2, .dark-mode .analytics-heading h2, .dark-mode .settings-view h2 { color: #fff !important; }
+.dark-mode .settings-row { border-top-color: rgba(255, 255, 255, 0.1) !important; }
+.dark-mode .settings-row strong:not([style]) { color: #e6edf0 !important; }
+.dark-mode .settings-row small { color: #a0aab2 !important; }
+button:disabled { cursor: not-allowed; opacity: 0.65; }

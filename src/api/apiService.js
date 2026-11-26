@@ -1,214 +1,252 @@
 /**
- * Ilm+ Tizimi uchun Markazlashtirilgan Real-Vaqt API Servisi
- * Ushbu modul orqali barcha tadqiqotchilar va adminlar real internetda bir-birining
- * kiritgan ma'lumotlari, fayllari va tasdiqlarini ko'ra oladi.
+ * Ilm+ tizimi uchun markazlashtirilgan API servisi.
+ * Barcha so'rovlar token (Authorization: Bearer) bilan yuboriladi;
+ * ma'lumotlar faqat serverda saqlanadi.
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+const TOKEN_KEY = 'ilm_token'
 
-let currentRevision = 0;
-let isConnected = true;
-const connectionListeners = new Set();
+let authToken = null
+try { authToken = localStorage.getItem(TOKEN_KEY) } catch { /* ignore */ }
+
+let credentialChangeInFlight = false
+let isConnected = true
+const connectionListeners = new Set()
+let unauthorizedHandler = null
+
+// Avvalgi versiyalar brauzerda butun bazani (parollar bilan) saqlab qo'ygan — ularni tozalaymiz
+try {
+  ;['ilm_accounts', 'ilm_researchers', 'ilm_expertise_cases', 'ilm_monitoring_files', 'ilm_monitoring_reports',
+    'ilm_kengash_files', 'ilm_post_defense_files', 'ilm_activity_log', 'ilm_normative_docs', 'ilm_auth',
+    'ilm_cached_sync_data', 'ilm_last_sync_revision'].forEach((key) => localStorage.removeItem(key))
+} catch { /* ignore */ }
+
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message)
+    this.status = status
+  }
+}
+
+export function getToken() {
+  return authToken
+}
+
+export function setToken(token) {
+  authToken = token || null
+  try {
+    if (authToken) localStorage.setItem(TOKEN_KEY, authToken)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch { /* ignore */ }
+}
+
+export function onUnauthorized(handler) {
+  unauthorizedHandler = handler
+}
 
 export function setConnectionStatus(status) {
   if (isConnected !== status) {
-    isConnected = status;
-    connectionListeners.forEach(listener => listener(status));
+    isConnected = status
+    connectionListeners.forEach((listener) => listener(status))
   }
 }
 
 export function onConnectionChange(listener) {
-  connectionListeners.add(listener);
-  listener(isConnected);
-  return () => connectionListeners.delete(listener);
+  connectionListeners.add(listener)
+  listener(isConnected)
+  return () => connectionListeners.delete(listener)
 }
 
-/**
- * Serverdagi barcha joriy ma'lumotlarni yuklab olish (Initial fetch)
- */
+async function request(path, { method = 'GET', body, formData, auth = true } = {}) {
+  const headers = { Accept: 'application/json' }
+  const tokenUsed = auth ? authToken : null
+  if (tokenUsed) headers.Authorization = `Bearer ${tokenUsed}`
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+
+  let res
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers,
+      cache: 'no-store',
+      body: formData || (body !== undefined ? JSON.stringify(body) : undefined)
+    })
+  } catch {
+    setConnectionStatus(false)
+    throw new ApiError("Serverga ulanib bo'lmadi. Internet aloqasini tekshiring.", 0)
+  }
+  setConnectionStatus(true)
+
+  let json = null
+  try { json = await res.json() } catch { /* javob JSON emas */ }
+
+  // Parol almashtirilayotgan paytda eski token bilan ketgan so'rov rad etilsa,
+  // foydalanuvchini tizimdan chiqarmaymiz — so'rov yangi token bilan qayta yuboriladi.
+  const staleToken = tokenUsed !== authToken || credentialChangeInFlight
+  if (res.status === 401 && auth && !staleToken) {
+    setToken(null)
+    if (unauthorizedHandler) unauthorizedHandler()
+  }
+  if (!res.ok || (json && json.success === false)) {
+    throw new ApiError(json?.message || `Server xatosi: ${res.status}`, res.status)
+  }
+  return json
+}
+
+/* ---------------- Autentifikatsiya ---------------- */
+
+export async function loginRequest(username, password, role) {
+  const result = await request('/api/auth/login', { method: 'POST', body: { username, password, role }, auth: false })
+  setToken(result.token)
+  return result.user
+}
+
+export async function fetchCurrentUser() {
+  const result = await request('/api/auth/me')
+  return result.user
+}
+
+export async function changePassword(currentPassword, newPassword) {
+  credentialChangeInFlight = true
+  try {
+    const result = await request('/api/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } })
+    if (result.token) setToken(result.token)
+    return result
+  } finally {
+    credentialChangeInFlight = false
+  }
+}
+
+export function logout() {
+  setToken(null)
+}
+
+/* ---------------- Sinxronizatsiya ---------------- */
+
 export async function fetchServerSync() {
-  try {
-    const res = await fetch(`${API_BASE}/api/sync`, {
-      headers: { 'Accept': 'application/json' }
-    });
-    if (!res.ok) throw new Error(`HTTP xatosi: ${res.status}`);
-    const result = await res.json();
-    if (result.success && result.data) {
-      currentRevision = result.revision || 1;
-      setConnectionStatus(true);
-      // Mahalliy xotiraga keshlab qo'yish
-      try {
-        localStorage.setItem('ilm_last_sync_revision', String(currentRevision));
-        localStorage.setItem('ilm_cached_sync_data', JSON.stringify(result.data));
-      } catch (e) {
-        console.warn('LocalStorage kesh xatosi:', e.message);
-      }
-      return { success: true, revision: result.revision, data: result.data };
-    }
-    throw new Error(result.message || "Ma'lumot olinmadi");
-  } catch (error) {
-    console.warn("[Ilm+ Sync] Serverga ulanib bo'lmadi, lokal xotiradan foydalanilmoqda:", error.message);
-    setConnectionStatus(false);
-    try {
-      const cached = localStorage.getItem('ilm_cached_sync_data');
-      if (cached) {
-        return { success: false, offline: true, data: JSON.parse(cached) };
-      }
-    } catch { }
-    return { success: false, offline: true, data: null };
-  }
+  const result = await request('/api/sync')
+  return { revision: result.revision, data: result.data }
 }
 
-/**
- * Serverga yangilangan to'plamlarni yuborish va saqlash
- */
-export async function pushServerSync(collections, actorName = '', actorAction = '') {
+export async function fetchServerRevision() {
+  const result = await request('/api/sync/version')
+  return result.revision
+}
+
+/** changes: { [collection]: { upsert, remove } } */
+export async function pushServerChanges(changes) {
+  return request('/api/sync', { method: 'POST', body: { changes } })
+}
+
+/** Sahifa yopilayotganda yuborilmagan o'zgarishlarni jo'natish (javob kutilmaydi). */
+export function flushServerChanges(changes) {
+  if (!authToken) return
   try {
-    const res = await fetch(`${API_BASE}/api/sync`, {
+    fetch(`${API_BASE}/api/sync`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({
-        collections,
-        actorName,
-        actorAction
-      })
-    });
-    if (!res.ok) throw new Error(`HTTP xatosi: ${res.status}`);
-    const result = await res.json();
-    if (result.success) {
-      currentRevision = result.revision;
-      setConnectionStatus(true);
-      return { success: true, revision: result.revision, data: result.data };
-    }
-    throw new Error(result.message || 'Saqlashda xatolik');
-  } catch (error) {
-    console.error("[Ilm+ Sync] Ma'lumotlarni serverga yuborishda xatolik:", error.message);
-    setConnectionStatus(false);
-    return { success: false, offline: true, error: error.message };
-  }
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ changes })
+    }).catch(() => {})
+  } catch { /* ignore */ }
 }
 
+/* ---------------- Fayllar ---------------- */
+
 /**
- * Fayllarni serverga yuklash (Multer API orqali haqiqiy fayl saqlash)
+ * Faylni serverga yuklaydi. Xatolik bo'lsa istisno (Error) tashlaydi —
+ * fayl serverga tushmagan bo'lsa, yozuv saqlanmasligi kerak.
  */
 export async function uploadRealFile(file, category = 'Umumiy', metadata = {}) {
-  try {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('category', category);
-    if (metadata.username) formData.append('username', metadata.username);
-    if (metadata.researcherName) formData.append('researcherName', metadata.researcherName);
-    if (metadata.reqId) formData.append('reqId', metadata.reqId);
-
-    const res = await fetch(`${API_BASE}/api/upload`, {
-      method: 'POST',
-      body: formData
-    });
-
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.message || `Yuklashda xatolik: ${res.status}`);
-    }
-
-    const result = await res.json();
-    if (result.success && result.data) {
-      setConnectionStatus(true);
-      return {
-        success: true,
-        fileUrl: result.data.fileUrl,
-        fileName: result.data.fileName,
-        originalName: result.data.originalName,
-        size: result.data.size,
-        mimeType: result.data.mimeType
-      };
-    }
-    throw new Error(result.message || 'Fayl javobi kutilmagan formatda');
-  } catch (error) {
-    console.error('[Ilm+ Upload] Fayl yuklashda xatolik:', error.message);
-    // Offline rejimda blob URL orqali zaxira
-    return {
-      success: false,
-      error: error.message,
-      fileUrl: URL.createObjectURL(file),
-      originalName: file.name,
-      size: file.size
-    };
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('category', category)
+  if (metadata.reqId) formData.append('reqId', metadata.reqId)
+  const result = await request('/api/upload', { method: 'POST', formData })
+  return {
+    success: true,
+    fileUrl: result.data.fileUrl,
+    fileName: result.data.fileName,
+    originalName: result.data.originalName,
+    size: result.data.size,
+    mimeType: result.data.mimeType
   }
 }
 
-/**
- * Avtomatik orqa fonda sinxronlash (Live Polling har 3-4 soniyada)
- * Admin yoki boshqa tadqiqotchi biror narsa kiritganda, boshqa brauzerlarda sahifa yangilanmasdan avtomatik aks etadi.
- */
-export function startLiveSync(onDataReceived, intervalMs = 3500) {
-  let isChecking = false;
+/* ---------------- Admin: zaxira ---------------- */
 
-  const checkVersion = async () => {
-    if (isChecking) return;
-    isChecking = true;
+export async function downloadBackup() {
+  const res = await fetch(`${API_BASE}/api/admin/backup`, { headers: { Authorization: `Bearer ${authToken}` } })
+  if (!res.ok) throw new ApiError(`Zaxira nusxani olishda xatolik: ${res.status}`, res.status)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `ilm-baza-zaxira-${new Date().toISOString().slice(0, 10)}.json`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export async function restoreBackup(data) {
+  return request('/api/admin/restore', { method: 'POST', body: { data } })
+}
+
+/* ---------------- Jonli sinxronizatsiya ---------------- */
+
+/**
+ * Har bir necha soniyada server reviziyasini tekshiradi; o'zgarish bo'lsa
+ * onChange(revision) chaqiriladi.
+ */
+export function startLiveSync(getKnownRevision, onChange, intervalMs = 4000) {
+  let checking = false
+  const check = async () => {
+    if (checking || !authToken || document.hidden) return
+    checking = true
     try {
-      const res = await fetch(`${API_BASE}/api/sync/version`, {
-        cache: 'no-store'
-      });
-      if (res.ok) {
-        const info = await res.json();
-        setConnectionStatus(true);
-        if (info.success && info.revision > currentRevision) {
-          console.log(`[Ilm+ Live] Yangi ma'lumotlar aniqlandi (Rev: ${info.revision} > ${currentRevision}). Sinxronlanmoqda...`);
-          const fullRes = await fetchServerSync();
-          if (fullRes.success && fullRes.data) {
-            onDataReceived(fullRes.data);
-          }
-        }
-      } else {
-        setConnectionStatus(false);
-      }
+      const revision = await fetchServerRevision()
+      if (revision !== getKnownRevision()) onChange(revision)
     } catch {
-      setConnectionStatus(false);
+      // ulanish holati request() ichida yangilanadi
     } finally {
-      isChecking = false;
+      checking = false
     }
-  };
-
-  const intervalId = setInterval(checkVersion, intervalMs);
-
-  const onFocusOrOnline = () => {
-    checkVersion();
-  };
-
-  window.addEventListener('focus', onFocusOrOnline);
-  window.addEventListener('online', onFocusOrOnline);
-
+  }
+  const intervalId = setInterval(check, intervalMs)
+  const onFocus = () => check()
+  window.addEventListener('focus', onFocus)
+  window.addEventListener('online', onFocus)
+  document.addEventListener('visibilitychange', onFocus)
   return () => {
-    clearInterval(intervalId);
-    window.removeEventListener('focus', onFocusOrOnline);
-    window.removeEventListener('online', onFocusOrOnline);
-  };
+    clearInterval(intervalId)
+    window.removeEventListener('focus', onFocus)
+    window.removeEventListener('online', onFocus)
+    document.removeEventListener('visibilitychange', onFocus)
+  }
 }
 
-/**
- * Faylni ochish yoki yuklab olish yordamchisi
- */
-export function openOrDownloadFile(fileUrl, fileName = 'hujjat.pdf') {
-  if (!fileUrl) {
-    alert("Fayl havolasi topilmadi!");
-    return;
+/** Serverdagi faylni ochish yoki yuklab olish (token bilan). */
+export function openOrDownloadFile(fileUrl, fileName = 'hujjat') {
+  if (!fileUrl || String(fileUrl).startsWith('blob:')) {
+    alert("Bu fayl serverga yuklanmagan yoki endi mavjud emas. Iltimos, faylni qayta yuklang.")
+    return
   }
-  
-  // Agar nisbiy URL bo'lsa to'liq manzilga aylantirish
-  const fullUrl = fileUrl.startsWith('http') || fileUrl.startsWith('blob:')
-    ? fileUrl
-    : `${API_BASE}${fileUrl}`;
-
-  const link = document.createElement('a');
-  link.href = fullUrl;
-  link.download = fileName;
-  link.target = '_blank';
-  link.rel = 'noopener noreferrer';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  let fullUrl = String(fileUrl)
+  if (!/^https?:\/\//i.test(fullUrl)) {
+    fullUrl = `${API_BASE}${fullUrl.startsWith('/') ? '' : '/'}${fullUrl}`
+  }
+  const isOwnServerFile = fullUrl.includes('/uploads/')
+  if (isOwnServerFile && authToken) {
+    fullUrl += `${fullUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(authToken)}`
+  }
+  const link = document.createElement('a')
+  link.href = fullUrl
+  link.download = fileName
+  link.target = '_blank'
+  link.rel = 'noopener noreferrer'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
 }

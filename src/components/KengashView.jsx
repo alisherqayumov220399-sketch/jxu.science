@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FileArchive, Upload, Check, X, CircleAlert, Trash2, Eye, Download, Loader2 } from 'lucide-react';
 import { KENGASH_DOCUMENTS } from '../data/kengashData';
 import { uploadRealFile, openOrDownloadFile } from '../api/apiService';
+import { uid } from '../utils/id.js';
 
 export function KengashStudentView({ user, kengashFiles, setKengashFiles, isSeminar, locale }) {
   const [uploadError, setUploadError] = useState('');
@@ -13,7 +14,7 @@ export function KengashStudentView({ user, kengashFiles, setKengashFiles, isSemi
 
   const handleCreate = (e) => {
     e.preventDefault();
-    setKengashFiles(prev => [...prev, { isApp: true, id: crypto.randomUUID(), username: user.username, degree: newDegree, isSeminar: !!isSeminar }]);
+    setKengashFiles(prev => [...prev, { isApp: true, id: uid('kfile'), username: user.username, degree: newDegree, isSeminar: !!isSeminar }]);
     setShowCreateModal(false);
   };
 
@@ -27,12 +28,9 @@ export function KengashStudentView({ user, kengashFiles, setKengashFiles, isSemi
     setUploadError('');
     setIsUploading(true);
     try {
-      const uploadRes = await uploadRealFile(file, isSeminar ? 'Ilmiy seminar' : 'Bir martalik kengash', {
-        username: user.username,
-        reqId
-      });
+      const uploadRes = await uploadRealFile(file, isSeminar ? 'Ilmiy seminar' : 'Bir martalik kengash', { reqId });
       const newFile = {
-        id: crypto.randomUUID(),
+        id: uid('kfile'),
         reqId,
         username: user.username,
         name: file.name,
@@ -51,6 +49,7 @@ export function KengashStudentView({ user, kengashFiles, setKengashFiles, isSemi
   };
 
   const removeFile = (reqId) => {
+    if (!window.confirm('Ushbu hujjatni o‘chirishni tasdiqlaysizmi?')) return;
     setKengashFiles(prev => prev.filter(f => !(f.reqId === reqId && f.username === user.username && !!f.isSeminar === !!isSeminar)));
   };
 
@@ -140,7 +139,7 @@ export function KengashStudentView({ user, kengashFiles, setKengashFiles, isSemi
                 {(!uploadedFile || uploadedFile.status === 'Rad etildi' || uploadedFile.status === 'Kutilmoqda') ? (
                   <label className="secondary-button" style={{ cursor: isUploading ? 'not-allowed' : 'pointer', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {isUploading ? <Loader2 size={14} className="spin" /> : <Upload size={14} />} {isUploading ? 'Yuklanmoqda...' : 'Yuklash'}
-                    <input type="file" disabled={isUploading} accept=".zip,.pdf,.doc,.docx" style={{ display: 'none' }} onChange={(e) => handleUpload(req.id, e.target.files[0])} />
+                    <input type="file" disabled={isUploading} accept=".zip,.pdf,.doc,.docx" style={{ display: 'none' }} onChange={(e) => { const file = e.target.files[0]; e.target.value = ''; handleUpload(req.id, file); }} />
                   </label>
                 ) : null}
                 {uploadedFile && uploadedFile.status === 'Kutilmoqda' && (
@@ -169,16 +168,16 @@ export function KengashAdminView({ kengashFiles, setKengashFiles, researchers, i
   };
 
   const updateStatus = (fileId, status) => {
-    if (status === 'Rad etildi' && !rejectReasons[fileId]) {
+    if (status === 'Rad etildi' && !rejectReasons[fileId]?.trim()) {
       alert("Iltimos, qaytarish sababini kiriting!");
       return;
     }
-    setKengashFiles(prev => prev.map(f => f.id === fileId ? { ...f, status, rejectReason: status === 'Rad etildi' ? rejectReasons[fileId] : f.rejectReason } : f));
+    setKengashFiles(prev => prev.map(f => f.id === fileId ? { ...f, status, rejectReason: status === 'Rad etildi' ? rejectReasons[fileId].trim() : '' } : f));
   };
 
   const acceptAll = (username) => {
     if(window.confirm("Barcha kutilayotgan hujjatlarni qabul qilasizmi?")) {
-      setKengashFiles(prev => prev.map(f => (f.username === username && f.status === 'Kutilmoqda') ? { ...f, status: 'Qabul qilindi' } : f));
+      setKengashFiles(prev => prev.map(f => (f.username === username && !!f.isSeminar === !!isSeminar && f.status === 'Kutilmoqda') ? { ...f, status: 'Qabul qilindi', rejectReason: '' } : f));
     }
   };
 
